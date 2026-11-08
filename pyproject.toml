@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "marketing-content-workflow"
+version = "0.1.0"
+description = "Auditable Brief → extract → generate → risk-check → confirm workflow for Chinese marketing copy, with an offline rubric."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "marketing-content-workflow contributors" }]
+keywords = [
+    "marketing",
+    "content",
+    "workflow",
+    "evaluation",
+    "chinese",
+    "llm",
+    "compliance",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business",
+]
+dependencies = ["PyYAML>=6.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+mcw = "mcw.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/KDB1223/marketing-content-workflow"
+Documentation = "https://github.com/KDB1223/marketing-content-workflow/blob/main/docs/lab-zh.md"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+mcw = ["fixtures/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "src"]

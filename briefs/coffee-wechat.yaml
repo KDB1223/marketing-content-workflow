@@ -1,0 +1,39 @@
+id: coffee-wechat
+title: 精品咖啡订阅公众号推文
+locale: zh-CN
+product:
+  name: 山序咖啡月订阅
+  category: 饮品
+  selling_points:
+    - 每月两袋单品豆，烘焙日期印在袋身
+    - 可在浅烘与中烘之间切换
+    - 顺丰冷链发出，到货后建议两周内喝完
+  claims_allowed:
+    - 烘焙日期
+    - 浅烘
+    - 中烘
+  disclaimers:
+    - 咖啡因敏感者请适量饮用。
+audience:
+  segment: 在家手冲的上班族
+  pain_points:
+    - 超市豆看不清烘焙日期
+  tone: 冷静、具体、像编辑部
+channel:
+  name: 微信公众号
+  format: article
+  max_chars: 700
+conversion:
+  goal: 点击阅读原文进入订阅页
+  cta: 点击阅读原文，选择下个月的烘焙度
+constraints:
+  must_include:
+    - 烘焙日期
+  must_avoid:
+    - 最好喝
+    - 第一
+  forbidden_claims:
+    - 减肥
+    - 排毒
+  regulatory_notes:
+    - 不要把咖啡写成保健品。

@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+      - name: Pytest
+        run: pytest -q
+      - name: Offline demo
+        run: |
+          python -m mcw run briefs/sunscreen-xhs.yaml --mock --run-id ci-sunscreen --out .mcw
+          python -m mcw score --fixtures
+          python -m mcw list-versions ci-sunscreen --out .mcw
+          python -m mcw run briefs/sunscreen-xhs.yaml --mock --continue-run ci-sunscreen --out .mcw \
+            --reviewer ci --comment "保留声明，删掉多余修饰"
+          python -m mcw compare ci-sunscreen --left v1 --right v2 --out .mcw >/tmp/mcw-compare.md
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path(".mcw/runs/ci-sunscreen")
+          drafts = json.loads((root / "drafts.json").read_text(encoding="utf-8"))
+          checklist = json.loads((root / "checklist.json").read_text(encoding="utf-8"))
+          scores = json.loads((root / "scores.json").read_text(encoding="utf-8"))
+          assert drafts["drafts"], "expected drafts"
+          assert checklist["items"], "expected checklist"
+          assert scores["not_business_conversion"] is True
+          assert "离线内容分" in scores["note"]
+          assert (root / "report.md").is_file()
+          assert (root / "compare-v1-v2.md").is_file()
+          print("ci demo ok", len(drafts["drafts"]))
+          PY

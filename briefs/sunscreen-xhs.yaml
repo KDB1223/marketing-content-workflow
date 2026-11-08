@@ -1,0 +1,40 @@
+id: sunscreen-xhs
+title: 夏季防晒乳小红书种草
+locale: zh-CN
+product:
+  name: 澄光防晒乳 SPF50+
+  category: 护肤
+  selling_points:
+    - 轻薄不油腻，上脸成膜快
+    - SPF50+ PA++++
+    - 添加积雪草，舒缓晒后泛红
+  claims_allowed:
+    - 轻薄
+    - SPF50+
+    - 积雪草
+  disclaimers:
+    - 防晒效果因人而异，长时间外出请及时补涂。
+audience:
+  segment: 18-28 岁都市通勤族
+  pain_points:
+    - 夏天出油怕搓泥
+  tone: 亲切、口语、不夸张
+channel:
+  name: xiaohongshu
+  format: note
+  max_chars: 450
+conversion:
+  goal: 收藏笔记并点击店铺链接
+  cta: 评论区扣「防晒」领取试用装说明
+constraints:
+  must_include:
+    - SPF50+
+  must_avoid:
+    - 最
+    - 第一
+    - "100%"
+  forbidden_claims:
+    - 医疗级美白
+    - 治疗晒伤
+  regulatory_notes:
+    - 化妆品不得宣称医疗功效，也不要承诺美白治疗。

@@ -1,0 +1,40 @@
+id: creditcard-official
+title: 联名信用卡权益页说明
+locale: zh-CN
+product:
+  name: 澄湾联名信用卡
+  category: 金融
+  selling_points:
+    - 每月 8 号、18 号公交地铁立减，单笔封顶 5 元
+    - 境外消费返现比例以卡片费率表为准
+    - 年费在核卡后首年减免
+  claims_allowed:
+    - 立减
+    - 费率表
+    - 首年减免
+  disclaimers:
+    - 具体额度、费率与权益以最终审批和当期费率表为准。
+audience:
+  segment: 比较卡权益的上班族
+  pain_points:
+    - 权益说明经常把上限写成承诺
+  tone: 正式、克制、条款清楚
+channel:
+  name: 官网
+  format: landing
+  max_chars: 650
+conversion:
+  goal: 跳转官方申请页
+  cta: 前往申请页查看当前费率表
+constraints:
+  must_include:
+    - 以最终审批和当期费率表为准
+  must_avoid:
+    - 绝对
+    - "100%"
+    - 人人可批
+  forbidden_claims:
+    - 保证下卡
+    - 额度随便填
+  regulatory_notes:
+    - 金融宣传不得承诺审批结果，不得使用绝对化用语。
