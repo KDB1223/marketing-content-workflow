@@ -15,7 +15,7 @@ def briefs_dir() -> Path:
     return BRIEFS
 
 
-def make_facts(**overrides: object) -> ExtractedFacts:
+def _make_facts(**overrides: object) -> ExtractedFacts:
     base: dict[str, object] = {
         "brief_id": "fixture",
         "title": "测试简报",
@@ -44,3 +44,10 @@ def make_facts(**overrides: object) -> ExtractedFacts:
     }
     base.update(overrides)
     return ExtractedFacts.from_dict(base)
+
+
+@pytest.fixture
+def make_facts():
+    """Factory fixture. Tests must not import this from conftest."""
+
+    return _make_facts

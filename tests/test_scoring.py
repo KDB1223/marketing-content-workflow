@@ -3,7 +3,6 @@ from __future__ import annotations
 from mcw.fixtures import score_cases
 from mcw.risk.rules import run_rules
 from mcw.scoring.rubric import score_readability, score_text, weighted_overall
-from tests.conftest import make_facts
 
 
 def test_weights_round_half_up() -> None:
@@ -29,7 +28,7 @@ def test_fixture_scores_match_recorded_values() -> None:
     assert all(row["note"].startswith("离线内容分") for row in rows)
 
 
-def test_score_is_reproducible() -> None:
+def test_score_is_reproducible(make_facts) -> None:
     facts = make_facts()
     text = "标题\n轻薄不油腻，上脸成膜快。SPF50+ PA++++。添加积雪草，舒缓晒后泛红。\n#护肤\n【声明】防晒效果因人而异，长时间外出请及时补涂。\n"
     first = score_text(text, facts)
@@ -38,7 +37,7 @@ def test_score_is_reproducible() -> None:
     assert first.to_dict()["not_business_conversion"] is True
 
 
-def test_channel_penalty_does_not_reduce_compliance() -> None:
+def test_channel_penalty_does_not_reduce_compliance(make_facts) -> None:
     facts = make_facts(required_elements=["标题", "正文", "话题标签"])
     text = "澄光防晒乳 SPF50+\n轻薄不油腻，上脸成膜快。SPF50+ PA++++。添加积雪草，舒缓晒后泛红。\n【声明】防晒效果因人而异，长时间外出请及时补涂。\n"
     findings = run_rules(text, facts)
@@ -48,7 +47,7 @@ def test_channel_penalty_does_not_reduce_compliance() -> None:
     assert card.channel_fit <= 85
 
 
-def test_length_penalty_is_channel_fit_only() -> None:
+def test_length_penalty_is_channel_fit_only(make_facts) -> None:
     facts = make_facts(max_chars=40, required_elements=[])
     text = "澄光防晒乳 SPF50+\n轻薄不油腻，上脸成膜快。SPF50+ PA++++。添加积雪草，舒缓晒后泛红。评论区扣「防晒」领取试用装说明。\n【声明】防晒效果因人而异，长时间外出请及时补涂。\n#小红书\n"
     card = score_text(text, facts)
