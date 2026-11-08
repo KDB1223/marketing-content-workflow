@@ -1,0 +1,38 @@
+id: fitness-douyin
+title: 居家跟练 App 抖音拉新
+locale: zh-CN
+product:
+  name: 燃点训练
+  category: 健身
+  selling_points:
+    - 每天 15 分钟跟练
+    - 零器械，客厅就能开始
+    - 关键动作配有要领字幕
+  claims_allowed:
+    - 15 分钟
+    - 零器械
+  disclaimers:
+    - 运动前请确认自身状况，量力而行。
+audience:
+  segment: 想在家恢复训练的新手
+  pain_points:
+    - 办了卡却总缺课
+  tone: 短句、利落、不喊口号
+channel:
+  name: 抖音
+  format: spoken
+  max_chars: 240
+conversion:
+  goal: 领取三天体验
+  cta: 点左下角领取三天体验
+constraints:
+  must_include:
+    - 15 分钟
+  must_avoid:
+    - 保证瘦
+    - 七天练出
+  forbidden_claims:
+    - 医疗康复
+    - 包瘦
+  regulatory_notes:
+    - 健身内容不得承诺疗效或具体减重结果。

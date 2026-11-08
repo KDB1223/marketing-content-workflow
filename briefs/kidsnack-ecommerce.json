@@ -1,0 +1,40 @@
+{
+  "id": "kidsnack-ecommerce",
+  "title": "儿童酸奶溶豆电商详情",
+  "locale": "zh-CN",
+  "product": {
+    "name": "小勺酸奶溶豆",
+    "category": "食品",
+    "selling_points": [
+      "每袋独立充氮，开袋能看到生产日期",
+      "配料表第一位是生牛乳，不是香精挂名",
+      "原味不额外加蔗糖，甜味来自水果粉"
+    ],
+    "claims_allowed": ["生产日期", "生牛乳", "不额外加蔗糖"],
+    "disclaimers": [
+      "本品不适合 3 岁以下婴幼儿作为主食，对乳制品过敏者请勿食用。"
+    ]
+  },
+  "audience": {
+    "segment": "给学龄前孩子买零食的家长",
+    "pain_points": ["配料表太长，看不出主要原料"],
+    "tone": "明白、安稳、不卖萌过头"
+  },
+  "channel": {
+    "name": "电商详情",
+    "format": "detail",
+    "max_chars": 560
+  },
+  "conversion": {
+    "goal": "加入购物车",
+    "cta": "先看配料表，再决定是否加入购物车"
+  },
+  "constraints": {
+    "must_include": ["生牛乳", "3 岁以下"],
+    "must_avoid": ["最健康", "零添加"],
+    "forbidden_claims": ["提高免疫力", "促进大脑发育", "代替正餐"],
+    "regulatory_notes": [
+      "儿童食品不得暗示益智或疾病预防，年龄与过敏提示必须出现。"
+    ]
+  }
+}
