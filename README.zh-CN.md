@@ -17,6 +17,7 @@ python3 -m pip install -e ".[dev]"
 python3 -m mcw run briefs/sunscreen-xhs.yaml --mock --run-id demo-sunscreen
 python3 -m mcw score --fixtures
 python3 -m mcw list-versions demo-sunscreen
+python3 -m mcw list-runs
 ```
 
 产物在 `.mcw/runs/demo-sunscreen/`。Mock 写出的小红书变体 A 是这样的：
@@ -85,8 +86,11 @@ flowchart LR
 | `mcw score --brief <文件> --draft <文件>` | 给一篇纯文本打分 |
 | `mcw compare <id> --left v1 --right v2` | 备注、分数和正文 diff |
 | `mcw list-versions <id>` | 列出版本和审阅备注 |
+| `mcw list-runs` | 列出已保存的运行、最新版本、确认状态和离线总分 |
 
 每个命令都可以加 `--json`。`--variants` 取 1 到 5。run id 只能是一段路径名。
+
+`mcw list-runs` 只读 `.mcw/runs/` 下的 `manifest.json` 和 `versions.json`，不调用模型。行里的总分是推荐稿上已保存的离线内容分，不是投放转化率。
 
 ## 五则中文 Brief
 
@@ -134,6 +138,6 @@ python3 -m pip install -e ".[dev]"
 pytest -q
 ```
 
-GitHub Actions 在 Python 3.11 和 3.12 上跑 pytest，再跑一遍 `mcw run --mock`、`mcw score --fixtures`、`mcw list-versions` 和 `mcw compare`。贡献方式见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+GitHub Actions 在 Python 3.11 和 3.12 上跑 pytest，再跑一遍 `mcw run --mock`、`mcw score --fixtures`、`mcw list-versions`、`mcw compare` 和 `mcw list-runs`。贡献方式见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 [MIT](LICENSE)

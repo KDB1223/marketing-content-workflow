@@ -1,4 +1,4 @@
-"""Command line: mcw run | score | compare | list-versions."""
+"""Command line: mcw run | score | compare | list-versions | list-runs."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from mcw.scoring.compare import render_comparison
 from mcw.scoring.rubric import DIMENSIONS, OFFLINE_SCORE_NOTE, score_text
 from mcw.stages.extract import extract
 from mcw.store import (
+    list_saved_runs,
     load_history,
     load_version_files,
     make_run_id,
@@ -78,6 +79,11 @@ def build_parser() -> argparse.ArgumentParser:
     listing.add_argument("--out", default=".mcw")
     listing.add_argument("--json", action="store_true", dest="as_json")
     listing.set_defaults(handler=cmd_list)
+
+    inventory = sub.add_parser("list-runs", help="列出已保存的运行、最新版本、确认状态和离线总分")
+    inventory.add_argument("--out", default=".mcw")
+    inventory.add_argument("--json", action="store_true", dest="as_json")
+    inventory.set_defaults(handler=cmd_list_runs)
     return parser
 
 
@@ -216,6 +222,29 @@ def cmd_list(args: argparse.Namespace) -> int:
             f"approval {item['approval_status']} | overall {item['overall_score']} | {item['comment']}"
         )
     print(f"note: {OFFLINE_SCORE_NOTE}")
+    return 0
+
+
+def cmd_list_runs(args: argparse.Namespace) -> int:
+    payload = list_saved_runs(Path(args.out))
+    if args.as_json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
+    for name in payload["skipped"]:
+        print(f"跳过无效运行目录: {name}", file=sys.stderr)
+    if not payload["runs"]:
+        print("没有运行")
+    else:
+        for item in payload["runs"]:
+            reviewer = item.get("reviewer") or "—"
+            comment = item.get("comment") or "—"
+            approval = item.get("approval_status") or "—"
+            print(
+                f"{item['run_id']} | {item['brief_id']} | versions {item['version_count']} | "
+                f"{item['latest_version']} | {item['created_at']} | reviewer {reviewer} | "
+                f"approval {approval} | overall {item['overall_score']} | {comment}"
+            )
+    print(f"note: {payload['note']}")
     return 0
 
 

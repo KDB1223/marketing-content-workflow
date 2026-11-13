@@ -28,6 +28,7 @@ jobs:
           python -m mcw run briefs/sunscreen-xhs.yaml --mock --continue-run ci-sunscreen --out .mcw \
             --reviewer ci --comment "保留声明，删掉多余修饰"
           python -m mcw compare ci-sunscreen --left v1 --right v2 --out .mcw >/tmp/mcw-compare.md
+          python -m mcw list-runs --out .mcw | tee /tmp/mcw-list-runs.txt
           python - <<'PY'
           import json
           from pathlib import Path
@@ -41,5 +42,8 @@ jobs:
           assert "离线内容分" in scores["note"]
           assert (root / "report.md").is_file()
           assert (root / "compare-v1-v2.md").is_file()
+          listing = Path("/tmp/mcw-list-runs.txt").read_text(encoding="utf-8")
+          assert "ci-sunscreen" in listing
+          assert "离线内容分" in listing
           print("ci demo ok", len(drafts["drafts"]))
           PY

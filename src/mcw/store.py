@@ -1,4 +1,4 @@
-"""Persist a run under ``.mcw/runs/<run_id>/``."""
+"""Persist a run under ``.mcw/runs/<run_id>/`` and read saved runs back."""
 
 from __future__ import annotations
 
@@ -108,6 +108,77 @@ def load_history(out: Path, run_id: str) -> dict[str, Any]:
     if not path.is_file():
         raise MCWError(f"找不到运行: {run_id}")
     return _read_json(path)
+
+
+def list_saved_runs(out: Path) -> dict[str, Any]:
+    """Inventory runs already written by persist_run.
+
+    Reads manifest.json and versions.json only. overall_score is the stored
+    offline content score of the latest version's recommended draft.
+    """
+    root = runs_root(out)
+    rows: list[dict[str, Any]] = []
+    skipped: list[str] = []
+    if root.is_dir():
+        names = sorted(path.name for path in root.iterdir() if path.is_dir())
+        for name in names:
+            try:
+                row = _saved_run_row(out, name)
+            except (MCWError, OSError, UnicodeError):
+                skipped.append(name)
+                continue
+            if row is None:
+                skipped.append(name)
+                continue
+            rows.append(row)
+    rows.sort(key=lambda item: (str(item["created_at"]), str(item["run_id"])))
+    return {
+        "runs": rows,
+        "skipped": skipped,
+        "note": OFFLINE_SCORE_NOTE,
+        "not_business_conversion": True,
+    }
+
+
+def _saved_run_row(out: Path, name: str) -> dict[str, Any] | None:
+    directory = runs_root(out) / name
+    manifest_path = directory / "manifest.json"
+    if not manifest_path.is_file() or not (directory / "versions.json").is_file():
+        return None
+    history = load_history(out, name)
+    manifest = _read_json(manifest_path)
+    versions = history.get("versions")
+    if not isinstance(versions, list):
+        return None
+    numbered: list[tuple[int, dict[str, Any]]] = []
+    for index, record in enumerate(versions):
+        if not isinstance(record, dict):
+            continue
+        version = record.get("version")
+        if isinstance(version, str) and _VERSION.fullmatch(version):
+            numbered.append((index, record))
+    if not numbered:
+        return None
+    _, latest = max(numbered, key=lambda pair: (int(pair[1]["version"][1:]), pair[0]))
+    brief_id = manifest.get("brief_id")
+    if not isinstance(brief_id, str) or not brief_id.strip():
+        return None
+    created_at = latest.get("created_at")
+    if not isinstance(created_at, str):
+        created_at = ""
+    return {
+        "run_id": name,
+        "brief_id": brief_id,
+        "version_count": len(numbered),
+        "latest_version": latest["version"],
+        "created_at": created_at,
+        "approval_status": latest.get("approval_status"),
+        "overall_score": latest.get("overall_score"),
+        "best_draft_id": latest.get("best_draft_id"),
+        "backend": latest.get("backend"),
+        "comment": latest.get("comment"),
+        "reviewer": latest.get("reviewer"),
+    }
 
 
 def load_version_files(out: Path, run_id: str, version: str) -> dict[str, Any]:
