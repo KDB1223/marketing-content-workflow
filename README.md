@@ -17,6 +17,7 @@ python3 -m pip install -e ".[dev]"
 python3 -m mcw run briefs/sunscreen-xhs.yaml --mock --run-id demo-sunscreen
 python3 -m mcw score --fixtures
 python3 -m mcw list-versions demo-sunscreen
+python3 -m mcw list-runs
 ```
 
 No API key. A run finishes in seconds and writes `.mcw/runs/demo-sunscreen/`:
@@ -89,8 +90,11 @@ Weights: 卖点准确 0.35, 渠道适配 0.25, 合规 0.25, 可读性 0.15. `mcw
 | `mcw score --brief <file> --draft <file>` | Score one text file |
 | `mcw compare <id> --left v1 --right v2` | Side-by-side comments, scores, and a text diff |
 | `mcw list-versions <id>` | Version index with reviewer comments |
+| `mcw list-runs` | Saved runs: latest version, approval, and the stored offline score |
 
 `--json` is available on every command. `--variants` accepts 1–5. Run ids are a single path segment (`^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$`).
+
+`mcw list-runs` only reads `manifest.json` and `versions.json` under `.mcw/runs/`. It does not call a model. The overall value is the stored offline content score of the recommended draft, not a conversion rate.
 
 ## Briefs
 
@@ -140,7 +144,7 @@ python3 -m pip install -e ".[dev]"
 pytest -q
 ```
 
-GitHub Actions runs pytest on Python 3.11 and 3.12, then `mcw run --mock`, `mcw score --fixtures`, `mcw list-versions`, and `mcw compare`. See [CONTRIBUTING.md](CONTRIBUTING.md).
+GitHub Actions runs pytest on Python 3.11 and 3.12, then `mcw run --mock`, `mcw score --fixtures`, `mcw list-versions`, `mcw compare`, and `mcw list-runs`. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
