@@ -144,6 +144,7 @@ python3 -m mcw run briefs/creditcard-official.yaml --mock \
   --approval examples/approval-approved.json
 python3 -m mcw list-versions lab-card
 python3 -m mcw list-runs
+python3 -m mcw stats
 python3 -m mcw compare lab-card --left v1 --right v2
 ```
 
@@ -152,6 +153,8 @@ python3 -m mcw compare lab-card --left v1 --right v2
 续写时 Brief 的指纹必须和第一版一致。防晒乳不能接着写进咖啡的版本史。
 
 几次运行叠在一起时，`mcw list-runs` 只读 `.mcw/runs/` 里的 `manifest.json` 和 `versions.json`，按最新版本的时间列出 run id、Brief、版本数、确认状态和离线总分。它不调用模型，也不重算量表。这一列总分仍是离线内容分，不是投放转化率。
+
+`mcw stats` 是同一批存档的汇总：确认状态各有多少、哪些 Brief 被跑过、已存储离线分的最小、最大和平均。它同样只读 `manifest.json` 和 `versions.json`，不调用模型，也不重算量表。这些数字仍是离线内容分，不是投放转化率。
 
 对照 Markdown 含审阅备注、推荐变体各维加减分、按变体的 unified diff，以及消除或新出现的检查项。开头重复离线分说明，避免把 `+0` 读成「转化没变」或把 `-6` 读成「少卖了 6%」。
 
