@@ -1,4 +1,4 @@
-"""Command line: mcw run | score | compare | list-versions | list-runs."""
+"""Command line: mcw run | score | compare | list-versions | list-runs | stats."""
 
 from __future__ import annotations
 
@@ -28,6 +28,7 @@ from mcw.store import (
     prepare_version,
     rescore_version,
     run_dir,
+    summarize_saved_runs,
 )
 
 def build_parser() -> argparse.ArgumentParser:
@@ -84,6 +85,12 @@ def build_parser() -> argparse.ArgumentParser:
     inventory.add_argument("--out", default=".mcw")
     inventory.add_argument("--json", action="store_true", dest="as_json")
     inventory.set_defaults(handler=cmd_list_runs)
+
+    stats_help = "汇总已保存运行的确认状态、Brief 覆盖和已存储的离线分数"
+    stats = sub.add_parser("stats", help=stats_help, description=stats_help)
+    stats.add_argument("--out", default=".mcw")
+    stats.add_argument("--json", action="store_true", dest="as_json")
+    stats.set_defaults(handler=cmd_stats)
     return parser
 
 
@@ -244,6 +251,45 @@ def cmd_list_runs(args: argparse.Namespace) -> int:
                 f"{item['latest_version']} | {item['created_at']} | reviewer {reviewer} | "
                 f"approval {approval} | overall {item['overall_score']} | {comment}"
             )
+    print(f"note: {payload['note']}")
+    return 0
+
+
+def cmd_stats(args: argparse.Namespace) -> int:
+    payload = summarize_saved_runs(Path(args.out))
+    if args.as_json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
+    for name in payload["skipped"]:
+        print(f"跳过无效运行目录: {name}", file=sys.stderr)
+    if payload["run_count"] == 0:
+        print("没有运行")
+        print(f"note: {payload['note']}")
+        return 0
+    print(f"runs: {payload['run_count']}")
+    print(f"versions: {payload['version_count']}")
+    approval = ", ".join(f"{key} {count}" for key, count in payload["approval"].items())
+    print(f"approval: {approval}")
+    briefs = ", ".join(f"{row['brief_id']} {row['run_count']}" for row in payload["briefs"])
+    print(f"briefs: {briefs}")
+    backends = ", ".join(f"{row['backend']} {row['run_count']}" for row in payload["backends"])
+    print(f"backends: {backends}")
+    overall = payload["overall_scores"]
+    if overall["count"] == 0:
+        print("overall: count 0")
+    else:
+        print(
+            f"overall: count {overall['count']}, min {overall['min']}, "
+            f"max {overall['max']}, mean {overall['mean']}"
+        )
+    labels = dict(DIMENSIONS)
+    parts = [
+        f"{labels[key]} {payload['dimension_scores'][key]['mean']}"
+        for key, _label in DIMENSIONS
+        if key in payload["dimension_scores"]
+    ]
+    if parts:
+        print("dimensions: " + ", ".join(parts))
     print(f"note: {payload['note']}")
     return 0
 

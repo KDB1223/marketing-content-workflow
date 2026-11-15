@@ -29,6 +29,7 @@ jobs:
             --reviewer ci --comment "保留声明，删掉多余修饰"
           python -m mcw compare ci-sunscreen --left v1 --right v2 --out .mcw >/tmp/mcw-compare.md
           python -m mcw list-runs --out .mcw | tee /tmp/mcw-list-runs.txt
+          python -m mcw stats --out .mcw | tee /tmp/mcw-stats.txt
           python - <<'PY'
           import json
           from pathlib import Path
@@ -45,5 +46,12 @@ jobs:
           listing = Path("/tmp/mcw-list-runs.txt").read_text(encoding="utf-8")
           assert "ci-sunscreen" in listing
           assert "离线内容分" in listing
+          stats = Path("/tmp/mcw-stats.txt").read_text(encoding="utf-8")
+          manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+          assert manifest["run_id"] == "ci-sunscreen"
+          assert manifest["brief_id"] in stats
+          assert "runs:" in stats
+          assert "versions:" in stats
+          assert "离线内容分" in stats
           print("ci demo ok", len(drafts["drafts"]))
           PY

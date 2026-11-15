@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from pathlib import Path
 from typing import Any
@@ -12,10 +13,11 @@ from mcw.models import Checklist, Draft, ExtractedFacts
 from mcw.pipeline import RunResult
 from mcw.report import render_report
 from mcw.schema import brief_fingerprint
-from mcw.scoring.rubric import OFFLINE_SCORE_NOTE, ScoreCard, WEIGHTS
+from mcw.scoring.rubric import DIMENSIONS, OFFLINE_SCORE_NOTE, ScoreCard, WEIGHTS
 
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$")
 _VERSION = re.compile(r"^v[1-9][0-9]{0,3}$")
+_APPROVAL_FIRST = ("approved", "pending", "rejected")
 LATEST_FILES = (
     "brief.json",
     "extracted.json",
@@ -178,7 +180,96 @@ def _saved_run_row(out: Path, name: str) -> dict[str, Any] | None:
         "backend": latest.get("backend"),
         "comment": latest.get("comment"),
         "reviewer": latest.get("reviewer"),
+        "dimension_scores": latest.get("dimension_scores"),
     }
+
+
+def summarize_saved_runs(out: Path) -> dict[str, Any]:
+    """Roll up the latest version of each run from list_saved_runs.
+
+    Reads the same manifest.json and versions.json index. Counts and means
+    are stored offline content scores, not a live-ad conversion rate.
+    """
+    inventory = list_saved_runs(out)
+    runs = inventory["runs"]
+    approval_counts: dict[str, int] = {}
+    brief_counts: dict[str, int] = {}
+    backend_counts: dict[str, int] = {}
+    overalls: list[int | float] = []
+    dimension_values: dict[str, list[int | float]] = {key: [] for key, _label in DIMENSIONS}
+    for row in runs:
+        status = _label_or_unknown(row.get("approval_status"))
+        approval_counts[status] = approval_counts.get(status, 0) + 1
+        brief_id = str(row["brief_id"])
+        brief_counts[brief_id] = brief_counts.get(brief_id, 0) + 1
+        backend = _label_or_unknown(row.get("backend"))
+        backend_counts[backend] = backend_counts.get(backend, 0) + 1
+        score = row.get("overall_score")
+        if _is_number(score):
+            overalls.append(score)
+        _collect_dimensions(row.get("dimension_scores"), dimension_values)
+    if overalls:
+        overall_scores: dict[str, Any] = {
+            "count": len(overalls),
+            "min": min(overalls),
+            "max": max(overalls),
+            "mean": round(sum(overalls) / len(overalls), 2),
+        }
+    else:
+        overall_scores = {"count": 0, "min": None, "max": None, "mean": None}
+    dimension_scores: dict[str, dict[str, Any]] = {}
+    for key, _label in DIMENSIONS:
+        values = dimension_values[key]
+        if not values:
+            continue
+        dimension_scores[key] = {
+            "count": len(values),
+            "mean": round(sum(values) / len(values), 2),
+        }
+    return {
+        "run_count": len(runs),
+        "skipped": inventory["skipped"],
+        "version_count": sum(row["version_count"] for row in runs),
+        "approval": _ordered_counts(approval_counts, _APPROVAL_FIRST),
+        "briefs": _ranked_counts(brief_counts, "brief_id"),
+        "backends": _ranked_counts(backend_counts, "backend"),
+        "overall_scores": overall_scores,
+        "dimension_scores": dimension_scores,
+        "note": OFFLINE_SCORE_NOTE,
+        "not_business_conversion": True,
+    }
+
+
+def _label_or_unknown(value: object) -> str:
+    if isinstance(value, str) and value:
+        return value
+    return "unknown"
+
+
+def _is_number(value: object) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    return not isinstance(value, float) or math.isfinite(value)
+
+
+def _collect_dimensions(raw: object, buckets: dict[str, list[int | float]]) -> None:
+    if not isinstance(raw, dict):
+        return
+    for key, _label in DIMENSIONS:
+        value = raw.get(key)
+        if _is_number(value):
+            buckets[key].append(value)
+
+
+def _ordered_counts(counts: dict[str, int], first: tuple[str, ...]) -> dict[str, int]:
+    keys = [key for key in first if key in counts]
+    keys.extend(sorted(key for key in counts if key not in first))
+    return {key: counts[key] for key in keys}
+
+
+def _ranked_counts(counts: dict[str, int], field: str) -> list[dict[str, Any]]:
+    names = sorted(counts, key=lambda name: (-counts[name], name))
+    return [{field: name, "run_count": counts[name]} for name in names]
 
 
 def load_version_files(out: Path, run_id: str, version: str) -> dict[str, Any]:
