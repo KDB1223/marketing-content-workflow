@@ -50,6 +50,7 @@ jobs:
           manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
           assert manifest["run_id"] == "ci-sunscreen"
           assert manifest["brief_id"] in stats
+          assert "小红书" in stats
           assert "runs:" in stats
           assert "versions:" in stats
           assert "离线内容分" in stats

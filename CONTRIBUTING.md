@@ -23,7 +23,7 @@ Python 3.10 or newer. Tests and `mcw score --fixtures` must pass without `MCW_LL
 
 1. Copy `briefs/sunscreen-xhs.yaml` or `briefs/kidsnack-ecommerce.json`.
 2. Use a new `id`. Keep selling points literal, and keep risky words out of `pain_points` unless you want the checklist to fire.
-3. Run `python3 -m mcw run briefs/<file> --mock --run-id <id>` and read `checklist.json`. `python3 -m mcw list-runs` lists every saved run under `.mcw/runs/` (latest version, approval, stored offline score) without calling a model. `python3 -m mcw stats` rolls up those same records: approval counts, Brief coverage, and stored offline-score min/max/mean.
+3. Run `python3 -m mcw run briefs/<file> --mock --run-id <id>` and read `checklist.json`. `python3 -m mcw list-runs` lists every saved run under `.mcw/runs/` (latest version, approval, stored offline score) without calling a model. `python3 -m mcw stats` rolls up those same records by Brief, backend, approval status, and channel, including each group's stored offline-score min/max/mean. New runs record channel on the index; older indexes without a channel show as unknown. Stats still only reads `manifest.json` and `versions.json`, does not call a model or recompute the rubric, and the numbers are not conversion rates.
 
 Channel names can be Chinese (`小红书`, `抖音`, `微信公众号`, `官网`, `电商详情`, `微博`) or the English ids in `mcw.schema.CHANNEL_ALIASES`.
 

@@ -95,6 +95,8 @@ def persist_run(out: Path, result: RunResult) -> Path:
         "brief_id": result.brief.id,
         "brief_fingerprint": brief_fingerprint(result.brief),
         "brief_path": result.brief_path,
+        "channel": result.brief.channel,
+        "channel_label": result.brief.channel_label,
         "created_at": history["versions"][0]["created_at"],
         "latest": result.version,
         "artifact_layout": "mcw-run-v1",
@@ -117,6 +119,8 @@ def list_saved_runs(out: Path) -> dict[str, Any]:
 
     Reads manifest.json and versions.json only. overall_score is the stored
     offline content score of the latest version's recommended draft.
+    channel and channel_label come from the latest version record, then the
+    manifest. Both are unknown when those fields are missing or empty.
     """
     root = runs_root(out)
     rows: list[dict[str, Any]] = []
@@ -178,6 +182,8 @@ def _saved_run_row(out: Path, name: str) -> dict[str, Any] | None:
         "overall_score": latest.get("overall_score"),
         "best_draft_id": latest.get("best_draft_id"),
         "backend": latest.get("backend"),
+        "channel": _indexed_text(latest, manifest, "channel"),
+        "channel_label": _indexed_text(latest, manifest, "channel_label"),
         "comment": latest.get("comment"),
         "reviewer": latest.get("reviewer"),
         "dimension_scores": latest.get("dimension_scores"),
@@ -189,34 +195,30 @@ def summarize_saved_runs(out: Path) -> dict[str, Any]:
 
     Reads the same manifest.json and versions.json index. Counts and means
     are stored offline content scores, not a live-ad conversion rate.
+    Briefs, backends, approval statuses, and channels each include that
+    group's stored overall min, max, and mean. A missing channel is unknown.
     """
     inventory = list_saved_runs(out)
     runs = inventory["runs"]
-    approval_counts: dict[str, int] = {}
-    brief_counts: dict[str, int] = {}
-    backend_counts: dict[str, int] = {}
+    approval_buckets: dict[str, dict[str, Any]] = {}
+    brief_buckets: dict[str, dict[str, Any]] = {}
+    backend_buckets: dict[str, dict[str, Any]] = {}
+    channel_buckets: dict[str, dict[str, Any]] = {}
     overalls: list[int | float] = []
     dimension_values: dict[str, list[int | float]] = {key: [] for key, _label in DIMENSIONS}
     for row in runs:
-        status = _label_or_unknown(row.get("approval_status"))
-        approval_counts[status] = approval_counts.get(status, 0) + 1
-        brief_id = str(row["brief_id"])
-        brief_counts[brief_id] = brief_counts.get(brief_id, 0) + 1
-        backend = _label_or_unknown(row.get("backend"))
-        backend_counts[backend] = backend_counts.get(backend, 0) + 1
         score = row.get("overall_score")
+        _record_score(approval_buckets, _label_or_unknown(row.get("approval_status")), score)
+        _record_score(brief_buckets, str(row["brief_id"]), score)
+        _record_score(backend_buckets, _label_or_unknown(row.get("backend")), score)
+        _record_channel(channel_buckets, row, score)
         if _is_number(score):
             overalls.append(score)
         _collect_dimensions(row.get("dimension_scores"), dimension_values)
-    if overalls:
-        overall_scores: dict[str, Any] = {
-            "count": len(overalls),
-            "min": min(overalls),
-            "max": max(overalls),
-            "mean": round(sum(overalls) / len(overalls), 2),
-        }
-    else:
-        overall_scores = {"count": 0, "min": None, "max": None, "mean": None}
+    approval = _ordered_counts(
+        {key: bucket["run_count"] for key, bucket in approval_buckets.items()},
+        _APPROVAL_FIRST,
+    )
     dimension_scores: dict[str, dict[str, Any]] = {}
     for key, _label in DIMENSIONS:
         values = dimension_values[key]
@@ -230,10 +232,14 @@ def summarize_saved_runs(out: Path) -> dict[str, Any]:
         "run_count": len(runs),
         "skipped": inventory["skipped"],
         "version_count": sum(row["version_count"] for row in runs),
-        "approval": _ordered_counts(approval_counts, _APPROVAL_FIRST),
-        "briefs": _ranked_counts(brief_counts, "brief_id"),
-        "backends": _ranked_counts(backend_counts, "backend"),
-        "overall_scores": overall_scores,
+        "approval": approval,
+        "approval_groups": [
+            _group_payload(approval_buckets[status], status=status) for status in approval
+        ],
+        "briefs": _ranked_groups(brief_buckets, "brief_id"),
+        "backends": _ranked_groups(backend_buckets, "backend"),
+        "channels": _ranked_channels(channel_buckets),
+        "overall_scores": _score_summary(overalls),
         "dimension_scores": dimension_scores,
         "note": OFFLINE_SCORE_NOTE,
         "not_business_conversion": True,
@@ -244,6 +250,78 @@ def _label_or_unknown(value: object) -> str:
     if isinstance(value, str) and value:
         return value
     return "unknown"
+
+
+def _indexed_text(latest: dict[str, Any], manifest: dict[str, Any], key: str) -> str:
+    for source in (latest, manifest):
+        value = source.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return "unknown"
+
+
+def _score_summary(values: list[int | float]) -> dict[str, Any]:
+    if not values:
+        return {"count": 0, "min": None, "max": None, "mean": None}
+    return {
+        "count": len(values),
+        "min": min(values),
+        "max": max(values),
+        "mean": round(sum(values) / len(values), 2),
+    }
+
+
+def _empty_bucket() -> dict[str, Any]:
+    return {"run_count": 0, "scores": []}
+
+
+def _record_score(buckets: dict[str, dict[str, Any]], key: str, score: object) -> None:
+    bucket = buckets.get(key)
+    if bucket is None:
+        bucket = _empty_bucket()
+        buckets[key] = bucket
+    bucket["run_count"] += 1
+    if _is_number(score):
+        bucket["scores"].append(score)
+
+
+def _record_channel(buckets: dict[str, dict[str, Any]], row: dict[str, Any], score: object) -> None:
+    channel = _label_or_unknown(row.get("channel"))
+    label = _label_or_unknown(row.get("channel_label"))
+    bucket = buckets.get(channel)
+    if bucket is None:
+        bucket = {"run_count": 0, "scores": [], "label": "unknown"}
+        buckets[channel] = bucket
+    bucket["run_count"] += 1
+    if _is_number(score):
+        bucket["scores"].append(score)
+    if bucket["label"] == "unknown" and label != "unknown":
+        bucket["label"] = label
+
+
+def _group_payload(bucket: dict[str, Any], **fields: object) -> dict[str, Any]:
+    row = dict(fields)
+    row["run_count"] = bucket["run_count"]
+    row["overall_scores"] = _score_summary(bucket["scores"])
+    return row
+
+
+def _ranked_groups(buckets: dict[str, dict[str, Any]], field: str) -> list[dict[str, Any]]:
+    names = sorted(buckets, key=lambda name: (-buckets[name]["run_count"], name))
+    return [_group_payload(buckets[name], **{field: name}) for name in names]
+
+
+def _ranked_channels(buckets: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    names = sorted(buckets, key=lambda name: (-buckets[name]["run_count"], name))
+    return [
+        {
+            "channel": name,
+            "channel_label": buckets[name]["label"],
+            "run_count": buckets[name]["run_count"],
+            "overall_scores": _score_summary(buckets[name]["scores"]),
+        }
+        for name in names
+    ]
 
 
 def _is_number(value: object) -> bool:
@@ -265,11 +343,6 @@ def _ordered_counts(counts: dict[str, int], first: tuple[str, ...]) -> dict[str,
     keys = [key for key in first if key in counts]
     keys.extend(sorted(key for key in counts if key not in first))
     return {key: counts[key] for key in keys}
-
-
-def _ranked_counts(counts: dict[str, int], field: str) -> list[dict[str, Any]]:
-    names = sorted(counts, key=lambda name: (-counts[name], name))
-    return [{field: name, "run_count": counts[name]} for name in names]
 
 
 def load_version_files(out: Path, run_id: str, version: str) -> dict[str, Any]:
@@ -387,6 +460,8 @@ def _version_record(result: RunResult) -> dict[str, Any]:
         "best_draft_id": result.best_draft_id,
         "draft_ids": [draft.id for draft in result.drafts],
         "backend": result.backend,
+        "channel": result.brief.channel,
+        "channel_label": result.brief.channel_label,
         "dimension_scores": best_score.dimension_map(),
         "variant_scores": [
             {"draft_id": draft.id, "variant": draft.variant, "overall": score.overall}

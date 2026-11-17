@@ -239,6 +239,8 @@ def test_list_runs_inventory_skips_junk(
     assert "versions 1" in listing
     assert "| v1 |" in listing
     assert "approval pending" in listing
+    assert "小红书" not in listing
+    assert "微信公众号" not in listing
     assert f"overall {sun['overall_score']}" in listing
     assert f"overall {coffee['overall_score']}" in listing
     assert OFFLINE_SCORE_NOTE in listing
@@ -276,7 +278,11 @@ def test_list_runs_inventory_skips_junk(
     assert "bad-shape" in payload["skipped"]
     by_id = {row["run_id"]: row for row in payload["runs"]}
     assert by_id["run-sun"]["brief_id"] == "sunscreen-xhs"
+    assert by_id["run-sun"]["channel"] == "xiaohongshu"
+    assert by_id["run-sun"]["channel_label"] == "小红书"
     assert by_id["run-coffee"]["brief_id"] == "coffee-wechat"
+    assert by_id["run-coffee"]["channel"] == "wechat"
+    assert by_id["run-coffee"]["channel_label"] == "微信公众号"
     assert by_id["run-sun"]["version_count"] == 1
     assert by_id["run-sun"]["latest_version"] == "v1"
     assert by_id["run-sun"]["approval_status"] == "pending"
@@ -324,6 +330,10 @@ def test_list_runs_inventory_skips_junk(
     assert by_id["run-coffee"]["latest_version"] == "v1"
     assert by_id["run-coffee"]["approval_status"] == "pending"
     assert by_id["run-coffee"]["overall_score"] == 42
+    assert by_id["run-sun"]["channel"] == "xiaohongshu"
+    assert by_id["run-sun"]["channel_label"] == "小红书"
+    assert by_id["run-coffee"]["channel"] == "wechat"
+    assert by_id["run-coffee"]["channel_label"] == "微信公众号"
 
     _set_latest_created_at(out, "run-sun", "2000-01-01T00:00:00+00:00")
     _set_latest_created_at(out, "run-coffee", "2001-01-01T00:00:00+00:00")
@@ -362,6 +372,7 @@ def test_stats_empty(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None
     assert "没有运行" in captured.out
     assert OFFLINE_SCORE_NOTE in captured.out
     assert "runs:" not in captured.out
+    assert "channels:" not in captured.out
     assert captured.err == ""
 
     code = main(["stats", "--out", str(out), "--json"])
@@ -371,7 +382,9 @@ def test_stats_empty(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None
     assert payload["version_count"] == 0
     assert payload["briefs"] == []
     assert payload["backends"] == []
+    assert payload["channels"] == []
     assert payload["approval"] == {}
+    assert payload["approval_groups"] == []
     assert payload["dimension_scores"] == {}
     assert payload["overall_scores"] == {"count": 0, "min": None, "max": None, "mean": None}
     assert payload["skipped"] == []
@@ -399,6 +412,8 @@ def test_stats_empty(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None
     payload = json.loads(capsys.readouterr().out)
     assert payload["run_count"] == 0
     assert payload["briefs"] == []
+    assert payload["channels"] == []
+    assert payload["approval_groups"] == []
     assert payload["skipped"] == ["nope"]
     assert payload["note"] == OFFLINE_SCORE_NOTE
     assert payload["not_business_conversion"] is True
@@ -445,15 +460,37 @@ def test_stats_inventory_uses_stored_scores(
 
     sun = _latest_record(out, "run-sun")
     coffee = _latest_record(out, "run-coffee")
+    assert sun["channel"] == "xiaohongshu"
+    assert sun["channel_label"] == "小红书"
+    assert coffee["channel"] == "wechat"
+    assert coffee["channel_label"] == "微信公众号"
+    sun_manifest = json.loads((out / "runs" / "run-sun" / "manifest.json").read_text(encoding="utf-8"))
+    coffee_manifest = json.loads((out / "runs" / "run-coffee" / "manifest.json").read_text(encoding="utf-8"))
+    assert sun_manifest["channel"] == sun["channel"]
+    assert sun_manifest["channel_label"] == sun["channel_label"]
+    assert coffee_manifest["channel"] == coffee["channel"]
+    assert coffee_manifest["channel_label"] == coffee["channel_label"]
     stored = [sun["overall_score"], coffee["overall_score"]]
+    sun_scores = _score_summary([sun["overall_score"]])
+    coffee_scores = _score_summary([coffee["overall_score"]])
+    both_scores = _score_summary(stored)
     code = main(["stats", "--out", str(out)])
     assert code == 0
     listing = capsys.readouterr().out
     assert "runs: 2" in listing
     assert "versions: 2" in listing
-    assert "approval: pending 2" in listing
-    assert "briefs: coffee-wechat 1, sunscreen-xhs 1" in listing
-    assert "backends: mock 2" in listing
+    assert f"approval: pending 2{_score_suffix(both_scores)}" in listing
+    assert (
+        "briefs: "
+        f"coffee-wechat 1{_score_suffix(coffee_scores)}, "
+        f"sunscreen-xhs 1{_score_suffix(sun_scores)}"
+    ) in listing
+    assert f"backends: mock 2{_score_suffix(both_scores)}" in listing
+    assert (
+        "channels: "
+        f"微信公众号 1{_score_suffix(coffee_scores)}, "
+        f"小红书 1{_score_suffix(sun_scores)}"
+    ) in listing
     assert f"overall: count 2, min {min(stored)}, max {max(stored)}, mean {_mean(stored)}" in listing
     assert f"dimensions: {_dimension_line(_paired_means(sun, coffee))}" in listing
     assert OFFLINE_SCORE_NOTE in listing
@@ -464,11 +501,28 @@ def test_stats_inventory_uses_stored_scores(
     assert payload["run_count"] == 2
     assert payload["version_count"] == 2
     assert payload["approval"] == {"pending": 2}
-    assert payload["briefs"] == [
-        {"brief_id": "coffee-wechat", "run_count": 1},
-        {"brief_id": "sunscreen-xhs", "run_count": 1},
+    assert payload["approval_groups"] == [
+        {"status": "pending", "run_count": 2, "overall_scores": both_scores}
     ]
-    assert payload["backends"] == [{"backend": "mock", "run_count": 2}]
+    assert payload["briefs"] == [
+        {"brief_id": "coffee-wechat", "run_count": 1, "overall_scores": coffee_scores},
+        {"brief_id": "sunscreen-xhs", "run_count": 1, "overall_scores": sun_scores},
+    ]
+    assert payload["backends"] == [{"backend": "mock", "run_count": 2, "overall_scores": both_scores}]
+    assert payload["channels"] == [
+        {
+            "channel": "wechat",
+            "channel_label": "微信公众号",
+            "run_count": 1,
+            "overall_scores": coffee_scores,
+        },
+        {
+            "channel": "xiaohongshu",
+            "channel_label": "小红书",
+            "run_count": 1,
+            "overall_scores": sun_scores,
+        },
+    ]
     assert payload["overall_scores"]["count"] == 2
     assert payload["overall_scores"]["min"] == min(stored)
     assert payload["overall_scores"]["max"] == max(stored)
@@ -539,12 +593,33 @@ def test_stats_inventory_uses_stored_scores(
     payload = json.loads(capsys.readouterr().out)
     assert payload["run_count"] == 2
     assert payload["version_count"] == 3
+    sun_only = _score_summary([sun_latest["overall_score"]])
+    coffee_only = _score_summary([42])
+    rolled_summary = _score_summary(rolled)
     assert payload["approval"] == {"approved": 1, "pending": 1}
-    assert payload["briefs"] == [
-        {"brief_id": "coffee-wechat", "run_count": 1},
-        {"brief_id": "sunscreen-xhs", "run_count": 1},
+    assert payload["approval_groups"] == [
+        {"status": "approved", "run_count": 1, "overall_scores": sun_only},
+        {"status": "pending", "run_count": 1, "overall_scores": coffee_only},
     ]
-    assert payload["backends"] == [{"backend": "mock", "run_count": 2}]
+    assert payload["briefs"] == [
+        {"brief_id": "coffee-wechat", "run_count": 1, "overall_scores": coffee_only},
+        {"brief_id": "sunscreen-xhs", "run_count": 1, "overall_scores": sun_only},
+    ]
+    assert payload["backends"] == [{"backend": "mock", "run_count": 2, "overall_scores": rolled_summary}]
+    assert payload["channels"] == [
+        {
+            "channel": "wechat",
+            "channel_label": "微信公众号",
+            "run_count": 1,
+            "overall_scores": coffee_only,
+        },
+        {
+            "channel": "xiaohongshu",
+            "channel_label": "小红书",
+            "run_count": 1,
+            "overall_scores": sun_only,
+        },
+    ]
     assert payload["overall_scores"] == {
         "count": 2,
         "min": min(rolled),
@@ -565,9 +640,22 @@ def test_stats_inventory_uses_stored_scores(
     listing = capsys.readouterr().out
     assert "runs: 2" in listing
     assert "versions: 3" in listing
-    assert "approval: approved 1, pending 1" in listing
-    assert "briefs: coffee-wechat 1, sunscreen-xhs 1" in listing
-    assert "backends: mock 2" in listing
+    assert (
+        "approval: "
+        f"approved 1{_score_suffix(sun_only)}, "
+        f"pending 1{_score_suffix(coffee_only)}"
+    ) in listing
+    assert (
+        "briefs: "
+        f"coffee-wechat 1{_score_suffix(coffee_only)}, "
+        f"sunscreen-xhs 1{_score_suffix(sun_only)}"
+    ) in listing
+    assert f"backends: mock 2{_score_suffix(rolled_summary)}" in listing
+    assert (
+        "channels: "
+        f"微信公众号 1{_score_suffix(coffee_only)}, "
+        f"小红书 1{_score_suffix(sun_only)}"
+    ) in listing
     assert f"overall: count 2, min {min(rolled)}, max {max(rolled)}, mean {_mean(rolled)}" in listing
     assert listing.split("dimensions: ", 1)[1].splitlines()[0] == _dimension_line(payload["dimension_scores"])
     assert OFFLINE_SCORE_NOTE in listing
@@ -639,8 +727,10 @@ def test_stats_text_skips_non_numeric_scores(tmp_path: Path, capsys: pytest.Capt
     assert "approval: approved 1, pending 1, rejected 1, needs-edit 1" in listing
     assert "briefs: coffee-wechat 2, sunscreen-xhs 1, zeta-brief 1" in listing
     assert "backends: unknown 3, live 1" in listing
+    assert "channels: unknown 4" in listing
     assert "overall: count 0" in listing
     assert "min " not in listing
+    assert "mean " not in listing
     assert "dimensions:" not in listing
     assert OFFLINE_SCORE_NOTE in listing
 
@@ -661,6 +751,7 @@ def test_stats_help(capsys: pytest.CaptureFixture[str]) -> None:
     assert "确认状态" in text
     assert "Brief" in text
     assert "离线分数" in text
+    assert "渠道" in text
 
     code = main(["--help"])
     assert code == 0
@@ -669,10 +760,141 @@ def test_stats_help(capsys: pytest.CaptureFixture[str]) -> None:
     assert "确认状态" in parent
     assert "Brief" in parent
     assert "离线分数" in parent
+    assert "渠道" in parent
 
 
 def _mean(values: list[int | float]) -> float:
     return round(sum(values) / len(values), 2)
+
+
+def _score_summary(values: list[int | float]) -> dict:
+    if not values:
+        return {"count": 0, "min": None, "max": None, "mean": None}
+    return {
+        "count": len(values),
+        "min": min(values),
+        "max": max(values),
+        "mean": _mean(values),
+    }
+
+
+def _score_suffix(summary: dict) -> str:
+    if summary["count"] == 0:
+        return ""
+    if summary["count"] == 1 or summary["min"] == summary["max"]:
+        return f" mean {summary['mean']}"
+    return f" min {summary['min']}, max {summary['max']}, mean {summary['mean']}"
+
+
+def test_stats_text_rolls_up_different_group_scores(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    out = tmp_path / "groups"
+    _save_index(
+        out,
+        "sun-a",
+        "sunscreen-xhs",
+        [
+            {
+                "version": "v1",
+                "created_at": "2024-01-01T00:00:00+00:00",
+                "approval_status": "pending",
+                "overall_score": 10,
+                "backend": "mock",
+                "channel": "xiaohongshu",
+                "channel_label": "小红书",
+            },
+            {
+                "version": "v2",
+                "created_at": "2024-02-01T00:00:00+00:00",
+                "approval_status": "approved",
+                "overall_score": 90,
+                "backend": "mock",
+                "channel": "xiaohongshu",
+                "channel_label": "小红书",
+            },
+        ],
+    )
+    _save_index(
+        out,
+        "sun-b",
+        "sunscreen-xhs",
+        [
+            {
+                "version": "v1",
+                "created_at": "2024-01-02T00:00:00+00:00",
+                "approval_status": "rejected",
+                "overall_score": 1,
+                "backend": "mock",
+                "channel": "xiaohongshu",
+                "channel_label": "小红书",
+            },
+            {
+                "version": "v3",
+                "created_at": "2024-03-01T00:00:00+00:00",
+                "approval_status": "approved",
+                "overall_score": 40,
+                "backend": "mock",
+                "channel": "xiaohongshu",
+                "channel_label": "unknown",
+            },
+        ],
+    )
+    _save_index(
+        out,
+        "coffee-a",
+        "coffee-wechat",
+        [
+            {
+                "version": "v1",
+                "created_at": "2024-04-01T00:00:00+00:00",
+                "approval_status": "pending",
+                "overall_score": 42,
+                "backend": "mock",
+                "channel": "wechat",
+                "channel_label": "微信公众号",
+            }
+        ],
+    )
+    _save_index(
+        out,
+        "coffee-b",
+        "coffee-wechat",
+        [
+            {
+                "version": "v1",
+                "created_at": "2024-04-02T00:00:00+00:00",
+                "approval_status": "pending",
+                "overall_score": 42,
+                "backend": "mock",
+                "channel": "wechat",
+                "channel_label": "微信公众号",
+            }
+        ],
+    )
+    code = main(["stats", "--out", str(out)])
+    assert code == 0
+    listing = capsys.readouterr().out
+    assert "runs: 4" in listing
+    assert "versions: 6" in listing
+    assert "approval: approved 2 min 40, max 90, mean 65.0, pending 2 mean 42.0" in listing
+    assert (
+        "briefs: coffee-wechat 2 mean 42.0, sunscreen-xhs 2 min 40, max 90, mean 65.0" in listing
+    )
+    assert "backends: mock 4 min 40, max 90, mean 53.5" in listing
+    assert "channels: 微信公众号 2 mean 42.0, 小红书 2 min 40, max 90, mean 65.0" in listing
+    assert "overall: count 4, min 40, max 90, mean 53.5" in listing
+    assert OFFLINE_SCORE_NOTE in listing
+
+    code = main(["stats", "--out", str(out), "--json"])
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    shared = {"count": 2, "min": 40, "max": 90, "mean": 65.0}
+    sunscreen = next(row for row in payload["briefs"] if row["brief_id"] == "sunscreen-xhs")
+    assert sunscreen["run_count"] == 2
+    assert sunscreen["overall_scores"] == shared
+    channel = next(row for row in payload["channels"] if row["channel"] == "xiaohongshu")
+    assert channel["channel_label"] == "小红书"
+    assert channel["overall_scores"] == shared
+    assert payload["overall_scores"]["min"] == 40
 
 
 def _assert_dimension_means(payload: dict, maps: list[dict]) -> None:
