@@ -92,13 +92,13 @@ Weights: 卖点准确 0.35, 渠道适配 0.25, 合规 0.25, 可读性 0.15. `mcw
 | `mcw compare <id> --left v1 --right v2` | Side-by-side comments, scores, and a text diff |
 | `mcw list-versions <id>` | Version index with reviewer comments |
 | `mcw list-runs` | Saved runs: latest version, approval, and the stored offline score |
-| `mcw stats` | Approval counts, Brief coverage, and stored offline-score min/max/mean |
+| `mcw stats` | Stored offline scores rolled up by approval, Brief, backend, and channel |
 
 `--json` is available on every command. `--variants` accepts 1–5. Run ids are a single path segment (`^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$`).
 
-`mcw list-runs` only reads `manifest.json` and `versions.json` under `.mcw/runs/`. It does not call a model. The overall value is the stored offline content score of the recommended draft, not a conversion rate.
+`mcw list-runs` only reads `manifest.json` and `versions.json` under `.mcw/runs/`. It does not call a model. The overall value is the stored offline content score of the recommended draft, not a conversion rate. JSON rows also include `channel` and `channel_label`; missing values are `unknown`.
 
-`mcw stats` reads those same two files and rolls up each saved run's latest version. It does not call a model or recompute the rubric. The totals are stored offline content scores, not conversion rates.
+`mcw stats` reads those same two files and rolls up each saved run's latest version. Besides the global min/max/mean, it groups stored offline scores by Brief, backend, approval status, and channel. New runs record the canonical channel id and label on `manifest.json` and `versions.json`. An older index without a channel is counted as `unknown`. Stats does not call a model or recompute the rubric. The numbers are stored offline content scores, not conversion rates.
 
 ## Briefs
 

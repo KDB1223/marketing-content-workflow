@@ -1,4 +1,11 @@
-"""Command line: mcw run | score | compare | list-versions | list-runs | stats."""
+"""Command line: mcw run | score | compare | list-versions | list-runs | stats.
+
+``mcw stats`` inventories saved runs from manifest.json and versions.json and
+rolls up stored offline scores by Brief, backend, approval status, and channel.
+It does not call a model or recompute the rubric. The numbers are not
+conversion rates. New runs record channel on the index; older indexes without
+a channel show as unknown.
+"""
 
 from __future__ import annotations
 
@@ -86,7 +93,10 @@ def build_parser() -> argparse.ArgumentParser:
     inventory.add_argument("--json", action="store_true", dest="as_json")
     inventory.set_defaults(handler=cmd_list_runs)
 
-    stats_help = "汇总已保存运行的确认状态、Brief 覆盖和已存储的离线分数"
+    stats_help = (
+        "按确认状态、Brief、后端和渠道汇总已存储的离线分数。"
+        "各组给出次数和最小、最大、平均；没有渠道的旧索引记为 unknown；不是转化率。"
+    )
     stats = sub.add_parser("stats", help=stats_help, description=stats_help)
     stats.add_argument("--out", default=".mcw")
     stats.add_argument("--json", action="store_true", dest="as_json")
@@ -268,12 +278,10 @@ def cmd_stats(args: argparse.Namespace) -> int:
         return 0
     print(f"runs: {payload['run_count']}")
     print(f"versions: {payload['version_count']}")
-    approval = ", ".join(f"{key} {count}" for key, count in payload["approval"].items())
-    print(f"approval: {approval}")
-    briefs = ", ".join(f"{row['brief_id']} {row['run_count']}" for row in payload["briefs"])
-    print(f"briefs: {briefs}")
-    backends = ", ".join(f"{row['backend']} {row['run_count']}" for row in payload["backends"])
-    print(f"backends: {backends}")
+    print("approval: " + _join_groups(payload["approval_groups"], "status"))
+    print("briefs: " + _join_groups(payload["briefs"], "brief_id"))
+    print("backends: " + _join_groups(payload["backends"], "backend"))
+    print("channels: " + _join_groups(payload["channels"], "channel_label"))
     overall = payload["overall_scores"]
     if overall["count"] == 0:
         print("overall: count 0")
@@ -292,6 +300,22 @@ def cmd_stats(args: argparse.Namespace) -> int:
         print("dimensions: " + ", ".join(parts))
     print(f"note: {payload['note']}")
     return 0
+
+
+def _stored_score_suffix(overall: dict) -> str:
+    count = overall["count"]
+    if count == 0:
+        return ""
+    if count == 1 or overall["min"] == overall["max"]:
+        return f" mean {overall['mean']}"
+    return f" min {overall['min']}, max {overall['max']}, mean {overall['mean']}"
+
+
+def _join_groups(rows: list[dict], label_key: str) -> str:
+    return ", ".join(
+        f"{row[label_key]} {row['run_count']}{_stored_score_suffix(row['overall_scores'])}"
+        for row in rows
+    )
 
 
 def _score_fixtures(as_json: bool) -> int:

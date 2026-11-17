@@ -88,13 +88,13 @@ flowchart LR
 | `mcw compare <id> --left v1 --right v2` | 备注、分数和正文 diff |
 | `mcw list-versions <id>` | 列出版本和审阅备注 |
 | `mcw list-runs` | 列出已保存的运行、最新版本、确认状态和离线总分 |
-| `mcw stats` | 汇总确认状态、Brief 覆盖，以及已存储离线分的最小、最大和平均 |
+| `mcw stats` | 按确认状态、Brief、后端和渠道汇总已存储的离线分 |
 
 每个命令都可以加 `--json`。`--variants` 取 1 到 5。run id 只能是一段路径名。
 
-`mcw list-runs` 只读 `.mcw/runs/` 下的 `manifest.json` 和 `versions.json`，不调用模型。行里的总分是推荐稿上已保存的离线内容分，不是投放转化率。
+`mcw list-runs` 只读 `.mcw/runs/` 下的 `manifest.json` 和 `versions.json`，不调用模型。行里的总分是推荐稿上已保存的离线内容分，不是投放转化率。`--json` 额外带上 `channel` 和 `channel_label`；索引里没有渠道时是 `unknown`。
 
-`mcw stats` 读同样的两个文件，按每条运行的最新版本做汇总。它不调用模型，也不重算量表。汇总数是已保存的离线内容分，不是投放转化率。
+`mcw stats` 读同样的两个文件，按每条运行的最新版本做汇总。除了全局的最小、最大和平均，它还按 Brief、后端、确认状态和渠道给出各组已存储的离线分。新运行会把规范渠道 id 和渠道名写进 `manifest.json` 和 `versions.json`。旧索引没有渠道时记为 `unknown`。它不调用模型，也不重算量表。这些数字仍是已保存的离线内容分，不是投放转化率。
 
 ## 五则中文 Brief
 
