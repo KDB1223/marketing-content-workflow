@@ -1,10 +1,14 @@
-"""Command line: mcw run | score | compare | list-versions | list-runs | stats.
+"""Command line: mcw run | score | compare | list-versions | list-runs | stats | failures.
 
 ``mcw stats`` inventories saved runs from manifest.json and versions.json and
 rolls up stored offline scores by Brief, backend, approval status, and channel.
 It does not call a model or recompute the rubric. The numbers are not
 conversion rates. New runs record channel on the index; older indexes without
 a channel show as unknown.
+
+``mcw failures`` lists saved runs whose latest version missed a full offline
+content score, was rejected, or whose recommended draft has a stored checklist
+failure or high-severity finding. It reads saved artifacts only.
 """
 
 from __future__ import annotations
@@ -27,6 +31,7 @@ from mcw.scoring.compare import render_comparison
 from mcw.scoring.rubric import DIMENSIONS, OFFLINE_SCORE_NOTE, score_text
 from mcw.stages.extract import extract
 from mcw.store import (
+    inventory_failures,
     list_saved_runs,
     load_history,
     load_version_files,
@@ -101,6 +106,17 @@ def build_parser() -> argparse.ArgumentParser:
     stats.add_argument("--out", default=".mcw")
     stats.add_argument("--json", action="store_true", dest="as_json")
     stats.set_defaults(handler=cmd_stats)
+
+    failures_help = (
+        "列出未满分、被驳回，或推荐稿清单未通过、含高风险项的已保存运行。"
+        "只读存档，不调用模型，也不重算量表。"
+    )
+    failures = sub.add_parser("failures", help=failures_help, description=failures_help)
+    failures.add_argument("run", nargs="?", default=None, help="只看这一次运行；默认扫描全部")
+    failures.add_argument("--version", default=None, help="配合 run id，默认该运行的最新版")
+    failures.add_argument("--out", default=".mcw")
+    failures.add_argument("--json", action="store_true", dest="as_json")
+    failures.set_defaults(handler=cmd_failures)
     return parser
 
 
@@ -300,6 +316,49 @@ def cmd_stats(args: argparse.Namespace) -> int:
         print("dimensions: " + ", ".join(parts))
     print(f"note: {payload['note']}")
     return 0
+
+
+def cmd_failures(args: argparse.Namespace) -> int:
+    payload = inventory_failures(Path(args.out), run_id=args.run, version=args.version)
+    if args.as_json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
+    for name in payload["skipped"]:
+        print(f"跳过无效运行目录: {name}", file=sys.stderr)
+    if not payload["failures"]:
+        print("没有未满分或被驳回的运行")
+    else:
+        for item in payload["failures"]:
+            _print_failure(item)
+    print(f"note: {payload['note']}")
+    return 0
+
+
+def _print_failure(item: dict) -> None:
+    approval = item.get("approval_status") or "—"
+    best = item.get("best_draft_id") or "—"
+    print(
+        f"{item['run_id']} | {item['brief_id']} | {item['version']} | "
+        f"approval {approval} | best {best} | overall {item['overall_score']}"
+    )
+    weak = item["weak_dimensions"]
+    if weak:
+        parts = ", ".join(f"{row['label']} {row['score']}" for row in weak)
+        print(f"dimensions: {parts}")
+    if item.get("checklist_passed") is False:
+        print("checklist: failed")
+    for finding in item["high_findings"]:
+        rule_id = finding.get("rule_id") or "—"
+        message = finding.get("message") or "—"
+        evidence = finding.get("evidence") or "—"
+        print(f"high: {rule_id} | {message} | {evidence}")
+    others = [row for row in item["variant_scores"] if not row.get("recommended")]
+    if others:
+        parts = ", ".join(
+            f"{row.get('variant') or '—'} {row.get('draft_id') or '—'} {row.get('overall')}"
+            for row in others
+        )
+        print(f"variants: {parts}")
 
 
 def _stored_score_suffix(overall: dict) -> str:

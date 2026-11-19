@@ -933,3 +933,236 @@ def test_score_drift_exits_one(briefs_dir: Path, tmp_path: Path, capsys: pytest.
     code = main(["score", "--run", "fit", "--version", "v1", "--out", str(out)])
     assert code == 1
     assert "drift" in capsys.readouterr().err
+
+
+def _snapshot(root: Path) -> dict[str, bytes]:
+    return {
+        str(path.relative_to(root)): path.read_bytes()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
+def test_failures_empty(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    out = tmp_path / "empty"
+    code = main(["failures", "--out", str(out)])
+    assert code == 0
+    captured = capsys.readouterr()
+    assert "没有未满分或被驳回的运行" in captured.out
+    assert OFFLINE_SCORE_NOTE in captured.out
+    assert captured.err == ""
+
+    code = main(["failures", "--out", str(out), "--json"])
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["failures"] == []
+    assert payload["skipped"] == []
+    assert payload["kind"] == "offline_content_score"
+    assert payload["note"] == OFFLINE_SCORE_NOTE
+    assert payload["not_business_conversion"] is True
+
+    junk_only = tmp_path / "junk-only"
+    (junk_only / "runs" / "nope").mkdir(parents=True)
+    code = main(["failures", "--out", str(junk_only)])
+    assert code == 0
+    captured = capsys.readouterr()
+    assert "没有未满分或被驳回的运行" in captured.out
+    assert "nope" not in captured.out
+    assert "跳过无效运行目录: nope" in captured.err
+
+
+def test_failures_text_and_json(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = tmp_path / "out"
+    run = out / "runs" / "low"
+    (run / "versions" / "v1").mkdir(parents=True)
+    _write_json(
+        run / "manifest.json",
+        {"run_id": "low", "brief_id": "coffee-wechat"},
+    )
+    _write_json(
+        run / "versions.json",
+        {
+            "run_id": "low",
+            "versions": [
+                {
+                    "version": "v1",
+                    "created_at": "2024-01-01T00:00:00+00:00",
+                    "approval_status": "pending",
+                    "overall_score": 86,
+                    "best_draft_id": "v1-a",
+                    "dimension_scores": {
+                        "selling_point_accuracy": 100,
+                        "channel_fit": 100,
+                        "compliance": 100,
+                        "readability": 100,
+                    },
+                }
+            ],
+        },
+    )
+    _write_json(
+        run / "versions" / "v1" / "checklist.json",
+        {
+            "items": [
+                {
+                    "draft_id": "v1-a",
+                    "passed": False,
+                    "summary": "",
+                    "findings": [
+                        {
+                            "rule_id": "absolute_claim",
+                            "severity": "high",
+                            "message": "绝对化用语",
+                            "evidence": "全网第一",
+                            "suggestion": "",
+                        }
+                    ],
+                }
+            ]
+        },
+    )
+    _write_json(
+        run / "versions" / "v1" / "scores.json",
+        {
+            "kind": "offline_content_score",
+            "not_business_conversion": True,
+            "best_draft_id": "v1-a",
+            "drafts": [
+                {
+                    "draft_id": "v1-a",
+                    "variant": "A",
+                    "score": {
+                        "overall": 86,
+                        "dimensions": {
+                            "selling_point_accuracy": {"label": "WRONG", "score": 80},
+                            "channel_fit": {"label": "WRONG", "score": 100},
+                            "compliance": {"label": "WRONG", "score": 75},
+                            "readability": {"label": "WRONG", "score": 100},
+                        },
+                    },
+                },
+                {
+                    "draft_id": "v1-b",
+                    "variant": "B",
+                    "score": {"overall": 60, "dimensions": {}},
+                },
+            ],
+        },
+    )
+    before = _snapshot(out)
+    code = main(["failures", "--out", str(out)])
+    assert code == 0
+    assert _snapshot(out) == before
+    text = capsys.readouterr().out
+    assert "low | coffee-wechat | v1 | approval pending | best v1-a | overall 86" in text
+    assert "dimensions: 卖点准确 80, 合规 75" in text
+    assert "checklist: failed" in text
+    assert "high: absolute_claim | 绝对化用语 | 全网第一" in text
+    assert "variants: B v1-b 60" in text
+    assert "WRONG" not in text
+    assert f"note: {OFFLINE_SCORE_NOTE}" in text
+
+    code = main(["failures", "--out", str(out), "--json"])
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["kind"] == "offline_content_score"
+    assert payload["note"] == OFFLINE_SCORE_NOTE
+    assert payload["not_business_conversion"] is True
+    assert payload["skipped"] == []
+    assert len(payload["failures"]) == 1
+    row = payload["failures"][0]
+    assert row["run_id"] == "low"
+    assert row["brief_id"] == "coffee-wechat"
+    assert row["version"] == "v1"
+    assert row["overall_score"] == 86
+    assert row["weak_dimensions"][0]["label"] == "卖点准确"
+    assert row["high_findings"][0]["evidence"] == "全网第一"
+    assert row["variant_scores"][1]["overall"] == 60
+
+
+def test_failures_named_missing_run_exits_2(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    out = tmp_path / "out"
+    run = out / "runs" / "sun"
+    run.mkdir(parents=True)
+    _write_json(run / "manifest.json", {"run_id": "sun", "brief_id": "sunscreen-xhs"})
+    _write_json(
+        run / "versions.json",
+        {
+            "run_id": "sun",
+            "versions": [
+                {
+                    "version": "v1",
+                    "created_at": "2024-01-01T00:00:00+00:00",
+                    "approval_status": "pending",
+                    "overall_score": 100,
+                    "best_draft_id": "v1-a",
+                }
+            ],
+        },
+    )
+    code = main(["failures", "missing-run", "--out", str(out)])
+    assert code == 2
+    assert "找不到运行" in capsys.readouterr().err
+
+    code = main(["failures", "sun", "--version", "v9", "--out", str(out)])
+    assert code == 2
+    assert "版本索引里没有 v9" in capsys.readouterr().err
+
+    code = main(["failures", "--version", "v1", "--out", str(out)])
+    assert code == 2
+    assert "--version" in capsys.readouterr().err
+
+
+def test_failures_mock_run_is_omitted_and_does_not_call_a_model(
+    briefs_dir: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("failures must not call a model or rescore")
+
+    out = tmp_path / "out"
+    assert (
+        main(
+            [
+                "run",
+                str(briefs_dir / "sunscreen-xhs.yaml"),
+                "--mock",
+                "--run-id",
+                "demo-sunscreen",
+                "--out",
+                str(out),
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    before = _snapshot(out)
+    monkeypatch.setattr("mcw.cli.rescore_version", fail)
+    monkeypatch.setattr("mcw.store.score_text_card", fail)
+    monkeypatch.setattr("mcw.scoring.rubric.score_text", fail)
+    monkeypatch.setattr("urllib.request.urlopen", fail)
+    code = main(["failures", "--out", str(out)])
+    assert code == 0
+    assert _snapshot(out) == before
+    captured = capsys.readouterr()
+    assert "没有未满分或被驳回的运行" in captured.out
+    assert "demo-sunscreen" not in captured.out
+    assert OFFLINE_SCORE_NOTE in captured.out
+    assert captured.err == ""
+
+
+def test_failures_help(capsys: pytest.CaptureFixture[str]) -> None:
+    code = main(["failures", "--help"])
+    assert code == 0
+    text = capsys.readouterr().out
+    assert "--out" in text
+    assert "--json" in text
+    assert "--version" in text
+
+    code = main(["--help"])
+    assert code == 0
+    assert "failures" in capsys.readouterr().out

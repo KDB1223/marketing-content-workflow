@@ -146,6 +146,42 @@ def list_saved_runs(out: Path) -> dict[str, Any]:
     }
 
 
+def inventory_failures(
+    out: Path,
+    run_id: str | None = None,
+    version: str | None = None,
+) -> dict[str, Any]:
+    """List saved versions that missed full credit or were rejected.
+
+    Reads manifest.json and versions.json first, using the same latest-version
+    rule as list_saved_runs. A row is included when the recommended draft's
+    stored overall_score is missing or not a finite number, or is below 100;
+    when approval_status is rejected; or when that draft's stored checklist
+    failed or contains a high-severity finding. Included rows then read
+    checklist.json and scores.json for findings and dimension scores. Missing
+    artifact files keep the index row and omit findings. Invalid run
+    directories stay in skipped. This does not call a model or recompute the
+    rubric. The numbers are stored offline content scores, not conversion rates.
+    """
+    if version is not None and run_id is None:
+        raise MCWError("--version 需要同时提供 run id")
+    if run_id is not None:
+        failure = _failure_for_named_run(out, run_id, version)
+        return _failure_payload([] if failure is None else [failure], [])
+    inventory = list_saved_runs(out)
+    failures: list[dict[str, Any]] = []
+    for row in inventory["runs"]:
+        history = load_history(out, str(row["run_id"]))
+        selected = _select_latest(history.get("versions"))
+        if selected is None:
+            continue
+        record, _count = selected
+        failure = _failure_from_record(out, str(row["run_id"]), str(row["brief_id"]), record)
+        if failure is not None:
+            failures.append(failure)
+    return _failure_payload(failures, list(inventory["skipped"]))
+
+
 def _saved_run_row(out: Path, name: str) -> dict[str, Any] | None:
     directory = runs_root(out) / name
     manifest_path = directory / "manifest.json"
@@ -153,19 +189,10 @@ def _saved_run_row(out: Path, name: str) -> dict[str, Any] | None:
         return None
     history = load_history(out, name)
     manifest = _read_json(manifest_path)
-    versions = history.get("versions")
-    if not isinstance(versions, list):
+    selected = _select_latest(history.get("versions"))
+    if selected is None:
         return None
-    numbered: list[tuple[int, dict[str, Any]]] = []
-    for index, record in enumerate(versions):
-        if not isinstance(record, dict):
-            continue
-        version = record.get("version")
-        if isinstance(version, str) and _VERSION.fullmatch(version):
-            numbered.append((index, record))
-    if not numbered:
-        return None
-    _, latest = max(numbered, key=lambda pair: (int(pair[1]["version"][1:]), pair[0]))
+    latest, version_count = selected
     brief_id = manifest.get("brief_id")
     if not isinstance(brief_id, str) or not brief_id.strip():
         return None
@@ -175,7 +202,7 @@ def _saved_run_row(out: Path, name: str) -> dict[str, Any] | None:
     return {
         "run_id": name,
         "brief_id": brief_id,
-        "version_count": len(numbered),
+        "version_count": version_count,
         "latest_version": latest["version"],
         "created_at": created_at,
         "approval_status": latest.get("approval_status"),
@@ -328,6 +355,270 @@ def _is_number(value: object) -> bool:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return False
     return not isinstance(value, float) or math.isfinite(value)
+
+
+def _numbered_versions(versions: object) -> list[tuple[int, dict[str, Any]]]:
+    if not isinstance(versions, list):
+        return []
+    numbered: list[tuple[int, dict[str, Any]]] = []
+    for index, record in enumerate(versions):
+        if not isinstance(record, dict):
+            continue
+        version = record.get("version")
+        if isinstance(version, str) and _VERSION.fullmatch(version):
+            numbered.append((index, record))
+    return numbered
+
+
+def _select_latest(versions: object) -> tuple[dict[str, Any], int] | None:
+    """Latest version record and how many numbered versions exist.
+
+    The latest record is the highest version number. Equal numbers keep the
+    later index, which is the same rule list_saved_runs uses.
+    """
+    numbered = _numbered_versions(versions)
+    if not numbered:
+        return None
+    _index, latest = max(numbered, key=lambda pair: (int(pair[1]["version"][1:]), pair[0]))
+    return latest, len(numbered)
+
+
+def _record_for_version(versions: object, version: str) -> dict[str, Any] | None:
+    matches = [pair for pair in _numbered_versions(versions) if pair[1]["version"] == version]
+    if not matches:
+        return None
+    return max(matches, key=lambda pair: pair[0])[1]
+
+
+def _failure_payload(failures: list[dict[str, Any]], skipped: list[str]) -> dict[str, Any]:
+    return {
+        "kind": "offline_content_score",
+        "failures": failures,
+        "skipped": skipped,
+        "note": OFFLINE_SCORE_NOTE,
+        "not_business_conversion": True,
+    }
+
+
+def _failure_for_named_run(out: Path, run_id: str, version: str | None) -> dict[str, Any] | None:
+    validate_run_id(run_id)
+    history = load_history(out, run_id)
+    if version is None:
+        selected = _select_latest(history.get("versions"))
+        if selected is None:
+            raise MCWError(f"找不到运行: {run_id}")
+        record = selected[0]
+    else:
+        validate_version(version)
+        record = _record_for_version(history.get("versions"), version)
+        if record is None:
+            raise MCWError(f"版本索引里没有 {version}")
+    manifest_path = run_dir(out, run_id) / "manifest.json"
+    if not manifest_path.is_file():
+        raise MCWError(f"找不到运行: {run_id}")
+    manifest = _read_json(manifest_path)
+    brief_id = manifest.get("brief_id")
+    if not isinstance(brief_id, str) or not brief_id.strip():
+        raise MCWError(f"找不到运行: {run_id}")
+    return _failure_from_record(out, run_id, brief_id, record)
+
+
+def _failure_from_record(
+    out: Path,
+    run_id: str,
+    brief_id: str,
+    record: dict[str, Any],
+) -> dict[str, Any] | None:
+    version = record.get("version")
+    if not isinstance(version, str):
+        return None
+    best_id = record.get("best_draft_id")
+    if not isinstance(best_id, str) or not best_id.strip():
+        best_id = None
+    checklist = _read_optional_json(version_dir(out, run_id, version) / "checklist.json")
+    scores = _read_optional_json(version_dir(out, run_id, version) / "scores.json")
+    checklist_item = _recommended_checklist(checklist, best_id)
+    highs = _high_findings(checklist_item)
+    reasons = _failure_reasons(record, checklist_item, highs)
+    if not reasons:
+        return None
+    passed = checklist_item.get("passed") if checklist_item is not None else None
+    if not isinstance(passed, bool):
+        passed = None
+    return {
+        "run_id": run_id,
+        "brief_id": brief_id,
+        "version": version,
+        "approval_status": record.get("approval_status"),
+        "best_draft_id": best_id,
+        "overall_score": record.get("overall_score"),
+        "weak_dimensions": _weak_dimensions(record, scores, best_id),
+        "high_findings": highs,
+        "checklist_passed": passed,
+        "variant_scores": _variant_scores(record, scores, best_id),
+        "reasons": reasons,
+    }
+
+
+def _failure_reasons(
+    record: dict[str, Any],
+    checklist_item: dict[str, Any] | None,
+    highs: list[dict[str, Any]],
+) -> list[str]:
+    reasons: list[str] = []
+    score = record.get("overall_score")
+    if not _is_number(score):
+        reasons.append("overall_unconfirmed")
+    elif score < 100:
+        reasons.append("overall_below_100")
+    if record.get("approval_status") == "rejected":
+        reasons.append("rejected")
+    if checklist_item is not None and checklist_item.get("passed") is False:
+        reasons.append("checklist_failed")
+    if highs:
+        reasons.append("high_finding")
+    return reasons
+
+
+def _recommended_checklist(checklist: dict[str, Any] | None, best_id: str | None) -> dict[str, Any] | None:
+    if checklist is None or best_id is None:
+        return None
+    items = checklist.get("items")
+    if not isinstance(items, list):
+        return None
+    for item in items:
+        if isinstance(item, dict) and item.get("draft_id") == best_id:
+            return item
+    return None
+
+
+def _high_findings(checklist_item: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if checklist_item is None:
+        return []
+    findings = checklist_item.get("findings")
+    if not isinstance(findings, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for finding in findings:
+        if not isinstance(finding, dict) or finding.get("severity") != "high":
+            continue
+        rows.append(
+            {
+                "rule_id": finding.get("rule_id"),
+                "message": finding.get("message"),
+                "evidence": finding.get("evidence"),
+            }
+        )
+    return rows
+
+
+def _weak_dimensions(
+    record: dict[str, Any],
+    scores: dict[str, Any] | None,
+    best_id: str | None,
+) -> list[dict[str, Any]]:
+    stored = _score_dimensions(_recommended_score(scores, best_id))
+    if stored is None:
+        stored = _index_dimensions(record.get("dimension_scores"))
+    if stored is None:
+        return []
+    weak: list[dict[str, Any]] = []
+    for key, label in DIMENSIONS:
+        value = stored.get(key)
+        if _is_number(value) and value < 100:
+            weak.append({"key": key, "label": label, "score": value})
+    return weak
+
+
+def _recommended_score(scores: dict[str, Any] | None, best_id: str | None) -> dict[str, Any] | None:
+    if scores is None or best_id is None:
+        return None
+    drafts = scores.get("drafts")
+    if not isinstance(drafts, list):
+        return None
+    for draft in drafts:
+        if not isinstance(draft, dict) or draft.get("draft_id") != best_id:
+            continue
+        score = draft.get("score")
+        if isinstance(score, dict):
+            return score
+    return None
+
+
+def _score_dimensions(score: dict[str, Any] | None) -> dict[str, Any] | None:
+    if score is None:
+        return None
+    dimensions = score.get("dimensions")
+    if not isinstance(dimensions, dict):
+        return None
+    values: dict[str, Any] = {}
+    for key, _label in DIMENSIONS:
+        item = dimensions.get(key)
+        if isinstance(item, dict):
+            values[key] = item.get("score")
+        else:
+            values[key] = item
+    return values
+
+
+def _index_dimensions(raw: object) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    return {key: raw.get(key) for key, _label in DIMENSIONS}
+
+
+def _variant_scores(
+    record: dict[str, Any],
+    scores: dict[str, Any] | None,
+    best_id: str | None,
+) -> list[dict[str, Any]]:
+    drafts = scores.get("drafts") if isinstance(scores, dict) else None
+    if isinstance(drafts, list) and drafts:
+        rows: list[dict[str, Any]] = []
+        for draft in drafts:
+            if not isinstance(draft, dict):
+                continue
+            score = draft.get("score")
+            overall = score.get("overall") if isinstance(score, dict) else None
+            draft_id = draft.get("draft_id")
+            rows.append(
+                {
+                    "draft_id": draft_id,
+                    "variant": draft.get("variant"),
+                    "overall": overall,
+                    "recommended": best_id is not None and draft_id == best_id,
+                }
+            )
+        return rows
+    stored = record.get("variant_scores")
+    if not isinstance(stored, list):
+        return []
+    rows = []
+    for item in stored:
+        if not isinstance(item, dict):
+            continue
+        draft_id = item.get("draft_id")
+        rows.append(
+            {
+                "draft_id": draft_id,
+                "variant": item.get("variant"),
+                "overall": item.get("overall"),
+                "recommended": best_id is not None and draft_id == best_id,
+            }
+        )
+    return rows
+
+
+def _read_optional_json(path: Path) -> dict[str, Any] | None:
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data
 
 
 def _collect_dimensions(raw: object, buckets: dict[str, list[int | float]]) -> None:

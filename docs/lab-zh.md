@@ -145,6 +145,7 @@ python3 -m mcw run briefs/creditcard-official.yaml --mock \
 python3 -m mcw list-versions lab-card
 python3 -m mcw list-runs
 python3 -m mcw stats
+python3 -m mcw failures
 python3 -m mcw compare lab-card --left v1 --right v2
 ```
 
@@ -155,6 +156,8 @@ python3 -m mcw compare lab-card --left v1 --right v2
 几次运行叠在一起时，`mcw list-runs` 只读 `.mcw/runs/` 里的 `manifest.json` 和 `versions.json`，按最新版本的时间列出 run id、Brief、版本数、确认状态和离线总分。它不调用模型，也不重算量表。这一列总分仍是离线内容分，不是投放转化率。`--json` 额外带上渠道 id 和渠道名；索引里没有渠道时是 `unknown`。
 
 `mcw stats` 是同一批存档的汇总：按确认状态、Brief、后端和渠道，给出各组已存储离线分的次数、最小、最大和平均。新运行会把渠道 id 和渠道名写进 `manifest.json` 和 `versions.json`。旧索引没有渠道时记为 `unknown`。它同样只读这两个文件，不调用模型，也不重算量表。这些数字仍是离线内容分，不是投放转化率。
+
+`mcw failures` 是同一批存档里需要复核的子集。推荐稿的离线分缺失或低于 100、确认状态是驳回，或推荐稿的清单未通过、含高风险发现时，这条运行会出现。它先读 `manifest.json` 和 `versions.json`，再读该版本已经写好的 `checklist.json` 和 `scores.json`，打印低于 100 的维度和已保存的高风险项（规则 id、说明、证据）。它不调用模型，也不重算量表。防晒乳这种 pending 且 100 分、清单通过的 Mock 运行不会出现；非推荐变体分数更低，只要推荐稿是干净的，也不会单独把这次运行列出来。这些数字仍是离线内容分，不是投放转化率。
 
 对照 Markdown 含审阅备注、推荐变体各维加减分、按变体的 unified diff，以及消除或新出现的检查项。开头重复离线分说明，避免把 `+0` 读成「转化没变」或把 `-6` 读成「少卖了 6%」。
 
