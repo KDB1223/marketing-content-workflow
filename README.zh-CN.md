@@ -19,6 +19,7 @@ python3 -m mcw score --fixtures
 python3 -m mcw list-versions demo-sunscreen
 python3 -m mcw list-runs
 python3 -m mcw stats
+python3 -m mcw failures
 ```
 
 产物在 `.mcw/runs/demo-sunscreen/`。Mock 写出的小红书变体 A 是这样的：
@@ -89,12 +90,15 @@ flowchart LR
 | `mcw list-versions <id>` | 列出版本和审阅备注 |
 | `mcw list-runs` | 列出已保存的运行、最新版本、确认状态和离线总分 |
 | `mcw stats` | 按确认状态、Brief、后端和渠道汇总已存储的离线分 |
+| `mcw failures` | 列出未满分、被驳回，或推荐稿含高风险项的已保存运行 |
 
 每个命令都可以加 `--json`。`--variants` 取 1 到 5。run id 只能是一段路径名。
 
 `mcw list-runs` 只读 `.mcw/runs/` 下的 `manifest.json` 和 `versions.json`，不调用模型。行里的总分是推荐稿上已保存的离线内容分，不是投放转化率。`--json` 额外带上 `channel` 和 `channel_label`；索引里没有渠道时是 `unknown`。
 
 `mcw stats` 读同样的两个文件，按每条运行的最新版本做汇总。除了全局的最小、最大和平均，它还按 Brief、后端、确认状态和渠道给出各组已存储的离线分。新运行会把规范渠道 id 和渠道名写进 `manifest.json` 和 `versions.json`。旧索引没有渠道时记为 `unknown`。它不调用模型，也不重算量表。这些数字仍是已保存的离线内容分，不是投放转化率。
+
+`mcw failures` 只列出还需要复核的存档。最新版本在这些情况下会出现：推荐稿已保存的离线分缺失或低于 100、确认状态是 `rejected`，或该稿清单的 `passed` 为 false、或有高风险发现。`mcw failures <run> [--version v1]` 只看这一条。它先读 `manifest.json` 和 `versions.json`，再读该版本已保存的 `checklist.json` 和 `scores.json`，用来显示扣分维度和已经记下的发现。它不调用模型，也不重算量表。pending、总分 100、清单通过且没有高风险项的运行不会出现；别的变体分数更低，只要推荐稿是干净的，也不会因此被列出来。这些数字仍是已保存的离线内容分，不是投放转化率。
 
 ## 五则中文 Brief
 
@@ -142,6 +146,6 @@ python3 -m pip install -e ".[dev]"
 pytest -q
 ```
 
-GitHub Actions 在 Python 3.11 和 3.12 上跑 pytest，再跑一遍 `mcw run --mock`、`mcw score --fixtures`、`mcw list-versions`、`mcw compare`、`mcw list-runs` 和 `mcw stats`。贡献方式见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+GitHub Actions 在 Python 3.11 和 3.12 上跑 pytest，再跑一遍 `mcw run --mock`、`mcw score --fixtures`、`mcw list-versions`、`mcw compare`、`mcw list-runs`、`mcw stats` 和 `mcw failures`。贡献方式见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 [MIT](LICENSE)

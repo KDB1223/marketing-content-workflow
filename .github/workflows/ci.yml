@@ -30,6 +30,7 @@ jobs:
           python -m mcw compare ci-sunscreen --left v1 --right v2 --out .mcw >/tmp/mcw-compare.md
           python -m mcw list-runs --out .mcw | tee /tmp/mcw-list-runs.txt
           python -m mcw stats --out .mcw | tee /tmp/mcw-stats.txt
+          python -m mcw failures --out .mcw | tee /tmp/mcw-failures.txt
           python - <<'PY'
           import json
           from pathlib import Path
@@ -54,5 +55,9 @@ jobs:
           assert "runs:" in stats
           assert "versions:" in stats
           assert "离线内容分" in stats
+          failures = Path("/tmp/mcw-failures.txt").read_text(encoding="utf-8")
+          assert "没有未满分或被驳回的运行" in failures
+          assert "ci-sunscreen" not in failures
+          assert "离线内容分" in failures
           print("ci demo ok", len(drafts["drafts"]))
           PY
