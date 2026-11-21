@@ -1166,3 +1166,282 @@ def test_failures_help(capsys: pytest.CaptureFixture[str]) -> None:
     code = main(["--help"])
     assert code == 0
     assert "failures" in capsys.readouterr().out
+
+
+_VALID_BRIEF = """\
+id: ok-brief
+title: 有效样例
+locale: zh-CN
+product:
+  name: 示例产品
+  category: 测试
+  selling_points:
+    - 卖点甲
+    - 卖点乙
+audience:
+  segment: 测试人群
+  tone: 平静
+channel:
+  name: 小红书
+  format: note
+  max_chars: 200
+conversion:
+  goal: 收藏
+  cta: 评论告诉我
+constraints:
+  must_include:
+    - 卖点甲
+  forbidden_claims:
+    - 医疗级
+"""
+
+_SHIPPED_IDS = [
+    "coffee-wechat",
+    "creditcard-official",
+    "fitness-douyin",
+    "kidsnack-ecommerce",
+    "sunscreen-xhs",
+]
+
+_SHIPPED_LABELS = {
+    "coffee-wechat": "微信公众号",
+    "creditcard-official": "官网",
+    "fitness-douyin": "抖音",
+    "kidsnack-ecommerce": "电商详情",
+    "sunscreen-xhs": "小红书",
+}
+
+
+def test_list_briefs_shipped(
+    briefs_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def fail(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("list-briefs must not call a model or score a draft")
+
+    root = briefs_dir.parent
+    monkeypatch.chdir(root)
+    monkeypatch.setattr("urllib.request.urlopen", fail)
+    monkeypatch.setattr("mcw.scoring.rubric.score_text", fail)
+    before = _snapshot(briefs_dir)
+    mcw_dir = root / ".mcw"
+    mcw_existed = mcw_dir.exists()
+    before_mcw = _snapshot(mcw_dir) if mcw_existed else None
+
+    code = main(["list-briefs"])
+    assert code == 0
+    captured = capsys.readouterr()
+    listing = captured.out
+    assert captured.err == ""
+    assert "没有 Brief" not in listing
+    assert "离线内容分" not in listing
+    assert (
+        "sunscreen-xhs | 夏季防晒乳小红书种草 | 小红书 | "
+        "卖点 3 | 必含 1 | 禁称 2 | briefs/sunscreen-xhs.yaml"
+    ) in listing
+    for brief_id, label in _SHIPPED_LABELS.items():
+        assert brief_id in listing
+        assert label in listing
+    assert "briefs: 5" in listing
+    assert "channels: 抖音 1, 电商详情 1, 官网 1, 微信公众号 1, 小红书 1" in listing
+    positions = [listing.index(brief_id) for brief_id in _SHIPPED_IDS]
+    assert positions == sorted(positions)
+    assert _snapshot(briefs_dir) == before
+    if mcw_existed:
+        assert _snapshot(mcw_dir) == before_mcw
+    else:
+        assert not mcw_dir.exists()
+
+    code = main(["list-briefs", "--json"])
+    assert code == 0
+    raw = capsys.readouterr().out
+    assert "小红书" in raw
+    assert "\\u5c0f" not in raw
+    payload = json.loads(raw)
+    assert payload["directory"] == "briefs"
+    assert payload["brief_count"] == 5
+    assert payload["skipped"] == []
+    assert [row["id"] for row in payload["briefs"]] == _SHIPPED_IDS
+    assert "note" not in payload
+    assert "not_business_conversion" not in payload
+    by_id = {row["id"]: row for row in payload["briefs"]}
+    for brief_id, label in _SHIPPED_LABELS.items():
+        assert by_id[brief_id]["channel_label"] == label
+        assert by_id[brief_id]["path"] == f"briefs/{Path(by_id[brief_id]['path']).name}"
+    sun = by_id["sunscreen-xhs"]
+    assert sun["path"] == "briefs/sunscreen-xhs.yaml"
+    assert sun["title"] == "夏季防晒乳小红书种草"
+    assert sun["locale"] == "zh-CN"
+    assert sun["product_name"] == "澄光防晒乳 SPF50+"
+    assert sun["category"] == "护肤"
+    assert sun["audience_segment"] == "18-28 岁都市通勤族"
+    assert sun["tone"] == "亲切、口语、不夸张"
+    assert sun["channel"] == "xiaohongshu"
+    assert sun["channel_format"] == "note"
+    assert sun["max_chars"] == 450
+    for key in (
+        "selling_points",
+        "must_include",
+        "must_avoid",
+        "forbidden_claims",
+        "regulatory_notes",
+        "disclaimers",
+        "pain_points",
+        "claims_allowed",
+        "required_elements",
+    ):
+        assert isinstance(sun[key], int)
+    assert sun["selling_points"] == 3
+    assert sun["must_include"] == 1
+    assert sun["must_avoid"] == 3
+    assert sun["forbidden_claims"] == 2
+    assert sun["regulatory_notes"] == 1
+    assert sun["disclaimers"] == 1
+    assert sun["pain_points"] == 1
+    assert sun["claims_allowed"] == 3
+    assert sun["required_elements"] == 3
+    assert [(row["channel"], row["channel_label"], row["brief_count"]) for row in payload["channels"]] == [
+        ("douyin", "抖音", 1),
+        ("ecommerce", "电商详情", 1),
+        ("official_site", "官网", 1),
+        ("wechat", "微信公众号", 1),
+        ("xiaohongshu", "小红书", 1),
+    ]
+
+
+def test_list_briefs_filters(
+    briefs_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.chdir(briefs_dir.parent)
+    for channel in ("小红书", "xiaohongshu", "xhs"):
+        code = main(["list-briefs", "--channel", channel])
+        assert code == 0
+        captured = capsys.readouterr()
+        assert captured.err == ""
+        assert "sunscreen-xhs | 夏季防晒乳小红书种草 | 小红书 |" in captured.out
+        for other in ("coffee-wechat", "fitness-douyin", "creditcard-official", "kidsnack-ecommerce"):
+            assert other not in captured.out
+        assert "briefs: 1" in captured.out
+        assert "channels: 小红书 1" in captured.out
+
+    code = main(["list-briefs", "--id", "coffee-wechat"])
+    assert code == 0
+    listing = capsys.readouterr().out
+    assert "coffee-wechat | 精品咖啡订阅公众号推文 | 微信公众号 |" in listing
+    assert "sunscreen-xhs" not in listing
+    assert "briefs: 1" in listing
+
+    code = main(["list-briefs", "--channel", "抖音", "--id", "coffee-wechat"])
+    assert code == 0
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "没有 Brief"
+    assert "briefs:" not in captured.out
+    assert captured.err == ""
+
+    code = main(["list-briefs", "--channel", "抖音", "--id", "coffee-wechat", "--json"])
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["directory"] == "briefs"
+    assert payload["briefs"] == []
+    assert payload["skipped"] == []
+    assert payload["brief_count"] == 0
+    assert payload["channels"] == []
+
+
+def test_list_briefs_missing_directory(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    missing = tmp_path / "missing-briefs"
+    code = main(["list-briefs", str(missing)])
+    assert code == 2
+    assert f"找不到 Brief 目录: {missing}" in capsys.readouterr().err
+
+    not_dir = tmp_path / "a-file.yaml"
+    not_dir.write_text("id: x\n", encoding="utf-8")
+    code = main(["list-briefs", str(not_dir)])
+    assert code == 2
+    assert f"找不到 Brief 目录: {not_dir}" in capsys.readouterr().err
+
+
+def test_list_briefs_skips_invalid_file(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    folder = tmp_path / "inbox"
+    folder.mkdir()
+    (folder / "ok.yaml").write_text(_VALID_BRIEF, encoding="utf-8")
+    (folder / "bad.yaml").write_text("id: [\n", encoding="utf-8")
+    (folder / "notes.txt").write_text("ignore", encoding="utf-8")
+    (folder / ".hidden.yaml").write_text("id: hidden\n", encoding="utf-8")
+    nested = folder / "nested"
+    nested.mkdir()
+    (nested / "inside.yaml").write_text(_VALID_BRIEF, encoding="utf-8")
+    before = _snapshot(folder)
+
+    code = main(["list-briefs", str(folder)])
+    assert code == 0
+    captured = capsys.readouterr()
+    expected = (Path(str(folder)) / "ok.yaml").as_posix()
+    expected_bad = (Path(str(folder)) / "bad.yaml").as_posix()
+    assert f"ok-brief | 有效样例 | 小红书 | 卖点 2 | 必含 1 | 禁称 1 | {expected}" in captured.out
+    assert "briefs: 1" in captured.out
+    assert "channels: 小红书 1" in captured.out
+    assert "inside.yaml" not in captured.out
+    assert "notes.txt" not in captured.out
+    assert ".hidden.yaml" not in captured.out
+    assert f"跳过无效 Brief 文件: {expected_bad}:" in captured.err
+    assert "notes.txt" not in captured.err
+    assert ".hidden.yaml" not in captured.err
+    assert "inside.yaml" not in captured.err
+    assert _snapshot(folder) == before
+    assert not (tmp_path / ".mcw").exists()
+
+    code = main(["list-briefs", str(folder), "--json"])
+    assert code == 0
+    raw = capsys.readouterr()
+    assert raw.err == ""
+    payload = json.loads(raw.out)
+    assert payload["directory"] == str(folder)
+    assert payload["brief_count"] == 1
+    assert payload["briefs"][0]["id"] == "ok-brief"
+    assert payload["briefs"][0]["selling_points"] == 2
+    assert isinstance(payload["briefs"][0]["forbidden_claims"], int)
+    assert payload["skipped"] == [
+        {"path": expected_bad, "error": payload["skipped"][0]["error"]},
+    ]
+    assert payload["skipped"][0]["error"]
+    assert "\n" not in payload["skipped"][0]["error"]
+
+
+def test_list_briefs_empty_directory(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    empty = tmp_path / "empty-briefs"
+    empty.mkdir()
+    (empty / "notes.txt").write_text("not a brief", encoding="utf-8")
+    (empty / "nested").mkdir()
+    code = main(["list-briefs", str(empty)])
+    assert code == 0
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "没有 Brief"
+    assert "briefs:" not in captured.out
+    assert captured.err == ""
+
+    code = main(["list-briefs", str(empty), "--json"])
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["directory"] == str(empty)
+    assert payload["briefs"] == []
+    assert payload["skipped"] == []
+    assert payload["brief_count"] == 0
+    assert payload["channels"] == []
+
+
+def test_list_briefs_help(capsys: pytest.CaptureFixture[str]) -> None:
+    code = main(["list-briefs", "--help"])
+    assert code == 0
+    text = capsys.readouterr().out
+    assert "--json" in text
+    assert "--channel" in text
+    assert "--id" in text
+    assert "briefs" in text
+
+    code = main(["--help"])
+    assert code == 0
+    assert "list-briefs" in capsys.readouterr().out

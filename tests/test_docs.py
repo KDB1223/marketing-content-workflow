@@ -15,6 +15,7 @@ def test_docs_name_the_commands_and_the_offline_boundary() -> None:
         assert "mcw compare" in text
         assert "mcw list-versions" in text
         assert "mcw list-runs" in text
+        assert "mcw list-briefs" in text
         assert "mcw stats" in text
         assert "mcw failures" in text
         assert "```mermaid" in text or "round_half_up" in text
