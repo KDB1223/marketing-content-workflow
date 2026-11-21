@@ -1,4 +1,9 @@
-"""Command line: mcw run | score | compare | list-versions | list-runs | stats | failures.
+"""Command line: mcw run | score | compare | list-versions | list-runs | list-briefs | stats | failures.
+
+``mcw list-briefs`` inventories Brief files in a directory (default ``briefs/``).
+It validates each file with the existing schema loader. It does not call a
+model or write ``.mcw/runs``. The counts are how many strings each Brief
+carries, not a score and not a conversion rate.
 
 ``mcw stats`` inventories saved runs from manifest.json and versions.json and
 rolls up stored offline scores by Brief, backend, approval status, and channel.
@@ -21,6 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from mcw import __version__
+from mcw.briefs_inventory import list_briefs
 from mcw.errors import MCWError
 from mcw.fixtures import score_cases
 from mcw.llm.mock import MockGenerator
@@ -97,6 +103,14 @@ def build_parser() -> argparse.ArgumentParser:
     inventory.add_argument("--out", default=".mcw")
     inventory.add_argument("--json", action="store_true", dest="as_json")
     inventory.set_defaults(handler=cmd_list_runs)
+
+    briefs_help = "列出目录里的 Brief 文件、渠道和约束条数。不调用模型，也不写入运行。"
+    briefs_cmd = sub.add_parser("list-briefs", help=briefs_help, description=briefs_help)
+    briefs_cmd.add_argument("directory", nargs="?", default="briefs", help="Brief 目录，默认 briefs")
+    briefs_cmd.add_argument("--channel", default=None, help="按渠道 id、中文名或别名过滤")
+    briefs_cmd.add_argument("--id", dest="brief_id", default=None, help="按 Brief.id 精确过滤")
+    briefs_cmd.add_argument("--json", action="store_true", dest="as_json", help="用 JSON 打印清点结果")
+    briefs_cmd.set_defaults(handler=cmd_list_briefs)
 
     stats_help = (
         "按确认状态、Brief、后端和渠道汇总已存储的离线分数。"
@@ -278,6 +292,31 @@ def cmd_list_runs(args: argparse.Namespace) -> int:
                 f"approval {approval} | overall {item['overall_score']} | {comment}"
             )
     print(f"note: {payload['note']}")
+    return 0
+
+
+def cmd_list_briefs(args: argparse.Namespace) -> int:
+    payload = list_briefs(args.directory, channel=args.channel, brief_id=args.brief_id)
+    if args.as_json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
+    for item in payload["skipped"]:
+        print(f"跳过无效 Brief 文件: {item['path']}: {item['error']}", file=sys.stderr)
+    if not payload["briefs"]:
+        print("没有 Brief")
+        return 0
+    for item in payload["briefs"]:
+        print(
+            f"{item['id']} | {item['title']} | {item['channel_label']} | "
+            f"卖点 {item['selling_points']} | 必含 {item['must_include']} | "
+            f"禁称 {item['forbidden_claims']} | {item['path']}"
+        )
+    print(f"briefs: {payload['brief_count']}")
+    if payload["channels"]:
+        parts = ", ".join(
+            f"{row['channel_label']} {row['brief_count']}" for row in payload["channels"]
+        )
+        print(f"channels: {parts}")
     return 0
 
 

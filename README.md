@@ -17,6 +17,7 @@ python3 -m pip install -e ".[dev]"
 python3 -m mcw run briefs/sunscreen-xhs.yaml --mock --run-id demo-sunscreen
 python3 -m mcw score --fixtures
 python3 -m mcw list-versions demo-sunscreen
+python3 -m mcw list-briefs
 python3 -m mcw list-runs
 python3 -m mcw stats
 python3 -m mcw failures
@@ -93,12 +94,15 @@ Weights: 卖点准确 0.35, 渠道适配 0.25, 合规 0.25, 可读性 0.15. `mcw
 | `mcw compare <id> --left v1 --right v2` | Side-by-side comments, scores, and a text diff |
 | `mcw list-versions <id>` | Version index with reviewer comments |
 | `mcw list-runs` | Saved runs: latest version, approval, and the stored offline score |
+| `mcw list-briefs [directory]` | Brief files in a directory: channel and constraint counts |
 | `mcw stats` | Stored offline scores rolled up by approval, Brief, backend, and channel |
 | `mcw failures` | Saved runs that missed full credit, were rejected, or have a stored high-severity finding |
 
 `--json` is available on every command. `--variants` accepts 1–5. Run ids are a single path segment (`^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$`).
 
 `mcw list-runs` only reads `manifest.json` and `versions.json` under `.mcw/runs/`. It does not call a model. The overall value is the stored offline content score of the recommended draft, not a conversion rate. JSON rows also include `channel` and `channel_label`; missing values are `unknown`.
+
+`mcw list-briefs` inventories Brief files in a directory (default `briefs/`). It reads only that directory's direct children whose suffix is `.yaml`, `.yml`, or `.json`, and validates each file with the same loader as `mcw run`. A text row is the id, title, channel label, and the counts of selling points, must-include lines, and forbidden claims. `--json` reports the other list fields as counts too. A file that fails to parse or validate is skipped; text mode names it on stderr, and the command still exits 0. `--channel` matches a canonical id (`xiaohongshu`), the Chinese label (`小红书`), or an alias from `CHANNEL_ALIASES` such as `xhs`. `--id` matches `Brief.id`. The filters combine. A filter that matches nothing prints `没有 Brief` and exits 0. The command does not call a model and does not write `.mcw/runs`. The counts are how many strings the Brief carries. They are not an offline content score and not a conversion rate.
 
 `mcw stats` reads those same two files and rolls up each saved run's latest version. Besides the global min/max/mean, it groups stored offline scores by Brief, backend, approval status, and channel. New runs record the canonical channel id and label on `manifest.json` and `versions.json`. An older index without a channel is counted as `unknown`. Stats does not call a model or recompute the rubric. The numbers are stored offline content scores, not conversion rates.
 
@@ -123,6 +127,7 @@ The normalized fields are `product`, `audience`, `channel`, `conversion`, and `c
 ```text
 briefs/                 example Briefs
 src/mcw/schema.py       YAML/JSON validation
+src/mcw/briefs_inventory.py  inventory of Brief files
 src/mcw/stages/         extract, generate, risk_check, confirm
 src/mcw/risk/rules.py   absolute words, overclaim, disclaimer, channel heuristics
 src/mcw/scoring/        rubric and version compare
@@ -152,7 +157,7 @@ python3 -m pip install -e ".[dev]"
 pytest -q
 ```
 
-GitHub Actions runs pytest on Python 3.11 and 3.12, then `mcw run --mock`, `mcw score --fixtures`, `mcw list-versions`, `mcw compare`, `mcw list-runs`, `mcw stats`, and `mcw failures`. See [CONTRIBUTING.md](CONTRIBUTING.md).
+GitHub Actions runs pytest on Python 3.11 and 3.12, then `mcw run --mock`, `mcw score --fixtures`, `mcw list-versions`, `mcw compare`, `mcw list-briefs`, `mcw list-runs`, `mcw stats`, and `mcw failures`. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

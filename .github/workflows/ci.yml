@@ -28,6 +28,8 @@ jobs:
           python -m mcw run briefs/sunscreen-xhs.yaml --mock --continue-run ci-sunscreen --out .mcw \
             --reviewer ci --comment "保留声明，删掉多余修饰"
           python -m mcw compare ci-sunscreen --left v1 --right v2 --out .mcw >/tmp/mcw-compare.md
+          python -m mcw list-briefs | tee /tmp/mcw-list-briefs.txt
+          python -m mcw list-briefs --json > /tmp/mcw-list-briefs.json
           python -m mcw list-runs --out .mcw | tee /tmp/mcw-list-runs.txt
           python -m mcw stats --out .mcw | tee /tmp/mcw-stats.txt
           python -m mcw failures --out .mcw | tee /tmp/mcw-failures.txt
@@ -47,6 +49,28 @@ jobs:
           listing = Path("/tmp/mcw-list-runs.txt").read_text(encoding="utf-8")
           assert "ci-sunscreen" in listing
           assert "离线内容分" in listing
+          briefs = Path("/tmp/mcw-list-briefs.txt").read_text(encoding="utf-8")
+          for brief_id in (
+              "sunscreen-xhs",
+              "coffee-wechat",
+              "fitness-douyin",
+              "creditcard-official",
+              "kidsnack-ecommerce",
+          ):
+              assert brief_id in briefs
+          for label in ("小红书", "微信公众号", "抖音", "官网", "电商详情"):
+              assert label in briefs
+          assert "briefs: 5" in briefs
+          brief_payload = json.loads(Path("/tmp/mcw-list-briefs.json").read_text(encoding="utf-8"))
+          assert brief_payload["brief_count"] == 5
+          assert brief_payload["skipped"] == []
+          assert {row["id"] for row in brief_payload["briefs"]} == {
+              "sunscreen-xhs",
+              "coffee-wechat",
+              "fitness-douyin",
+              "creditcard-official",
+              "kidsnack-ecommerce",
+          }
           stats = Path("/tmp/mcw-stats.txt").read_text(encoding="utf-8")
           manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
           assert manifest["run_id"] == "ci-sunscreen"

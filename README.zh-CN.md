@@ -17,6 +17,7 @@ python3 -m pip install -e ".[dev]"
 python3 -m mcw run briefs/sunscreen-xhs.yaml --mock --run-id demo-sunscreen
 python3 -m mcw score --fixtures
 python3 -m mcw list-versions demo-sunscreen
+python3 -m mcw list-briefs
 python3 -m mcw list-runs
 python3 -m mcw stats
 python3 -m mcw failures
@@ -89,12 +90,15 @@ flowchart LR
 | `mcw compare <id> --left v1 --right v2` | 备注、分数和正文 diff |
 | `mcw list-versions <id>` | 列出版本和审阅备注 |
 | `mcw list-runs` | 列出已保存的运行、最新版本、确认状态和离线总分 |
+| `mcw list-briefs [directory]` | 列出目录里的 Brief 文件、渠道和约束条数 |
 | `mcw stats` | 按确认状态、Brief、后端和渠道汇总已存储的离线分 |
 | `mcw failures` | 列出未满分、被驳回，或推荐稿含高风险项的已保存运行 |
 
 每个命令都可以加 `--json`。`--variants` 取 1 到 5。run id 只能是一段路径名。
 
 `mcw list-runs` 只读 `.mcw/runs/` 下的 `manifest.json` 和 `versions.json`，不调用模型。行里的总分是推荐稿上已保存的离线内容分，不是投放转化率。`--json` 额外带上 `channel` 和 `channel_label`；索引里没有渠道时是 `unknown`。
+
+`mcw list-briefs` 清点一个目录里的 Brief 文件（默认 `briefs/`）。它只读该目录的直接子文件，后缀是 `.yaml`、`.yml` 或 `.json`，并用和 `mcw run` 相同的 schema 校验。每一行给出 id、标题、渠道名，以及卖点、必含和禁称的条数。`--json` 里其余列表字段也是条数。解析或校验失败的文件记入 skipped，文本模式在 stderr 打印 `跳过无效 Brief 文件`，命令仍退出 0。`--channel` 接受规范渠道 id（`xiaohongshu`）、中文渠道名（`小红书`），或 `CHANNEL_ALIASES` 里的别名（例如 `xhs`）。`--id` 精确匹配 Brief.id。两个条件同时生效。没有命中时打印 `没有 Brief`，退出码仍是 0。它不调用模型，也不写入 `.mcw/runs`。这些条数是 Brief 里有几句话，不是离线内容分，也不是投放转化率。
 
 `mcw stats` 读同样的两个文件，按每条运行的最新版本做汇总。除了全局的最小、最大和平均，它还按 Brief、后端、确认状态和渠道给出各组已存储的离线分。新运行会把规范渠道 id 和渠道名写进 `manifest.json` 和 `versions.json`。旧索引没有渠道时记为 `unknown`。它不调用模型，也不重算量表。这些数字仍是已保存的离线内容分，不是投放转化率。
 
@@ -117,6 +121,7 @@ flowchart LR
 ```text
 briefs/                 示例 Brief
 src/mcw/schema.py       YAML/JSON 校验
+src/mcw/briefs_inventory.py  Brief 文件清点
 src/mcw/stages/         extract / generate / risk_check / confirm
 src/mcw/risk/rules.py   绝对化、夸大、声明、渠道形态
 src/mcw/scoring/        量表和版本对照
@@ -146,6 +151,6 @@ python3 -m pip install -e ".[dev]"
 pytest -q
 ```
 
-GitHub Actions 在 Python 3.11 和 3.12 上跑 pytest，再跑一遍 `mcw run --mock`、`mcw score --fixtures`、`mcw list-versions`、`mcw compare`、`mcw list-runs`、`mcw stats` 和 `mcw failures`。贡献方式见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+GitHub Actions 在 Python 3.11 和 3.12 上跑 pytest，再跑一遍 `mcw run --mock`、`mcw score --fixtures`、`mcw list-versions`、`mcw compare`、`mcw list-briefs`、`mcw list-runs`、`mcw stats` 和 `mcw failures`。贡献方式见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 [MIT](LICENSE)

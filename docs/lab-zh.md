@@ -26,6 +26,8 @@ pytest -q
 
 `channel.name` 接受 `官网`、`小红书`、`抖音`、`微信公众号`、`电商详情`、`微博`，也会接受对应的英文 id。
 
+`python3 -m mcw list-briefs` 清点目录里的 Brief（默认 `briefs/`）。它只看该目录的直接子文件，后缀是 `.yaml`、`.yml` 或 `.json`，并用现有的 `load_brief` 校验。文本模式每行是 id、标题、渠道名，以及卖点、必含、禁称的条数。校验失败的文件不会让整条命令失败，stderr 会写 `跳过无效 Brief 文件`。它不调用模型，也不写入 `.mcw/runs`。条数是字段里有几句话，不是离线内容分，也不是转化率。`--channel` 接受规范渠道 id、中文渠道名，或 `CHANNEL_ALIASES` 里的别名（例如 `xhs`、`微信`）；`--id` 精确匹配 Brief.id。筛完没有命中时打印 `没有 Brief`，退出码仍是 0。
+
 提取阶段不做摘要模型。`src/mcw/stages/extract.py` 把这些字段投影成 `fact_lines`。生成器拿到的是这份清单，不是原始 YAML 的任意注释。
 
 ## 2. 跑通 Mock
@@ -143,6 +145,7 @@ python3 -m mcw run briefs/creditcard-official.yaml --mock \
   --comment "删掉口头禅，保留审批声明" \
   --approval examples/approval-approved.json
 python3 -m mcw list-versions lab-card
+python3 -m mcw list-briefs
 python3 -m mcw list-runs
 python3 -m mcw stats
 python3 -m mcw failures
@@ -152,6 +155,8 @@ python3 -m mcw compare lab-card --left v1 --right v2
 `examples/approval-approved.json` 用变体字母 `A` 选中当前版本的 A 稿。`approved` 或 `rejected` 必须带审阅人和 `draft_id`。备注不是「初稿」时，会写进提示词；Mock 还会在不超字数的前提下加一行「修订回应」。超字数就只把备注留在 `versions.json`，不把正文撑破。
 
 续写时 Brief 的指纹必须和第一版一致。防晒乳不能接着写进咖啡的版本史。
+
+`mcw list-briefs` 不读 `.mcw/runs/`。它清点 Brief 文件本身：渠道、卖点条数、必含条数和禁称条数。没有模型调用，也没有分数。
 
 几次运行叠在一起时，`mcw list-runs` 只读 `.mcw/runs/` 里的 `manifest.json` 和 `versions.json`，按最新版本的时间列出 run id、Brief、版本数、确认状态和离线总分。它不调用模型，也不重算量表。这一列总分仍是离线内容分，不是投放转化率。`--json` 额外带上渠道 id 和渠道名；索引里没有渠道时是 `unknown`。
 
@@ -192,7 +197,7 @@ findings = run_rules(text, facts, rules=[*builtin_rules(), CompetitorNameRule()]
 
 ## 8. 换一篇自己的 Brief
 
-复制 `briefs/sunscreen-xhs.yaml`，改 id、卖点和声明。然后：
+复制 `briefs/sunscreen-xhs.yaml`，改 id、卖点和声明。写完可以用 `python3 -m mcw list-briefs` 看这份 Brief 有没有被收进 `briefs/`，渠道名是否识别，卖点和禁称各有几条。然后：
 
 ```bash
 python3 -m mcw run briefs/your-brief.yaml --mock --run-id your-demo
