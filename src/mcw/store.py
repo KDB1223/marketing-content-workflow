@@ -12,12 +12,17 @@ from mcw.errors import MCWError
 from mcw.models import Checklist, Draft, ExtractedFacts
 from mcw.pipeline import RunResult
 from mcw.report import render_report
-from mcw.schema import brief_fingerprint
+from mcw.schema import CHANNEL_ALIASES, brief_fingerprint
 from mcw.scoring.rubric import DIMENSIONS, OFFLINE_SCORE_NOTE, ScoreCard, WEIGHTS
 
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$")
 _VERSION = re.compile(r"^v[1-9][0-9]{0,3}$")
 _APPROVAL_FIRST = ("approved", "pending", "rejected")
+FINDINGS_INVENTORY_NOTE = (
+    "这些行来自已保存的 checklist.json，列出已经记下的清单发现。"
+    "它不是真实投放转化率，也不能代替 A/B 实验或业务结果。"
+)
+
 LATEST_FILES = (
     "brief.json",
     "extracted.json",
@@ -180,6 +185,216 @@ def inventory_failures(
         if failure is not None:
             failures.append(failure)
     return _failure_payload(failures, list(inventory["skipped"]))
+
+
+def inventory_findings(
+    out: Path,
+    run_id: str | None = None,
+    version: str | None = None,
+    *,
+    rule: str | None = None,
+    severity: str | None = None,
+    channel: str | None = None,
+    draft: str | None = None,
+    brief: str | None = None,
+) -> dict[str, Any]:
+    """Inventory stored checklist findings for the selected versions.
+
+    Reads manifest.json and versions.json first, using the same latest-version
+    rule as list_saved_runs. Then reads that version's checklist.json. Every
+    draft item is walked, in file order, and every severity is kept. A missing
+    checklist, a missing findings field, a non-list, or an empty list adds no
+    rows. Non-dict finding entries are skipped. Filters are exact and combined.
+    ``channel`` matches a canonical id, the Chinese label, or CHANNEL_ALIASES.
+    An index without a channel is ``unknown`` and only matches that text.
+    Counts of runs with and without findings are taken before filters.
+    ``n_listed`` and the rule/severity breakdowns count only the remaining rows.
+    This does not call a model, recompute risk rules, or write files. The rows
+    are stored checklist findings, not a conversion rate.
+    """
+    if version is not None and run_id is None:
+        raise MCWError("--version 需要同时提供 run id")
+    if run_id is not None:
+        selected = [_named_finding_source(out, run_id, version)]
+        skipped: list[str] = []
+    else:
+        inventory = list_saved_runs(out)
+        selected = [_finding_source_from_row(row) for row in inventory["runs"]]
+        skipped = list(inventory["skipped"])
+    loaded: list[tuple[dict[str, str], list[dict[str, Any]]]] = []
+    for source in selected:
+        checklist = _read_optional_json(
+            version_dir(out, source["run_id"], source["version"]) / "checklist.json"
+        )
+        loaded.append((source, _stored_findings(source, checklist)))
+    listed: list[dict[str, Any]] = []
+    for source, findings in loaded:
+        if not _finding_source_matches(source, channel=channel, brief=brief):
+            continue
+        for row in findings:
+            if _finding_row_matches(row, rule=rule, severity=severity, draft=draft):
+                listed.append(row)
+    n_with = sum(1 for _source, findings in loaded if findings)
+    return {
+        "kind": "stored_checklist_findings",
+        "n": len(loaded),
+        "n_with_findings": n_with,
+        "n_without_findings": len(loaded) - n_with,
+        "n_listed": len(listed),
+        "by_rule": _ranked_named_counts([_bucket_name(row.get("rule_id")) for row in listed], "rule_id"),
+        "by_severity": _ranked_named_counts(
+            [_bucket_name(row.get("severity")) for row in listed],
+            "severity",
+        ),
+        "filters": {
+            "run": run_id,
+            "version": version,
+            "rule": rule,
+            "severity": severity,
+            "channel": channel,
+            "draft": draft,
+            "brief": brief,
+        },
+        "skipped": skipped,
+        "findings": listed,
+        "note": FINDINGS_INVENTORY_NOTE,
+        "not_business_conversion": True,
+    }
+
+
+def _finding_source_from_row(row: dict[str, Any]) -> dict[str, str]:
+    return {
+        "run_id": str(row["run_id"]),
+        "brief_id": str(row["brief_id"]),
+        "version": str(row["latest_version"]),
+        "channel": str(row["channel"]),
+        "channel_label": str(row["channel_label"]),
+    }
+
+
+def _named_finding_source(out: Path, run_id: str, version: str | None) -> dict[str, str]:
+    validate_run_id(run_id)
+    history = load_history(out, run_id)
+    if version is None:
+        selected = _select_latest(history.get("versions"))
+        if selected is None:
+            raise MCWError(f"找不到运行: {run_id}")
+        record = selected[0]
+    else:
+        validate_version(version)
+        record = _record_for_version(history.get("versions"), version)
+        if record is None:
+            raise MCWError(f"版本索引里没有 {version}")
+    manifest_path = run_dir(out, run_id) / "manifest.json"
+    if not manifest_path.is_file():
+        raise MCWError(f"找不到运行: {run_id}")
+    manifest = _read_json(manifest_path)
+    brief_id = manifest.get("brief_id")
+    if not isinstance(brief_id, str) or not brief_id.strip():
+        raise MCWError(f"找不到运行: {run_id}")
+    chosen = record.get("version")
+    if not isinstance(chosen, str):
+        raise MCWError(f"找不到运行: {run_id}")
+    return {
+        "run_id": run_id,
+        "brief_id": brief_id,
+        "version": chosen,
+        "channel": _indexed_text(record, manifest, "channel"),
+        "channel_label": _indexed_text(record, manifest, "channel_label"),
+    }
+
+
+def _stored_findings(source: dict[str, str], checklist: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(checklist, dict):
+        return []
+    items = checklist.get("items")
+    if not isinstance(items, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        findings = item.get("findings")
+        if not isinstance(findings, list):
+            continue
+        draft_id = item.get("draft_id")
+        for finding in findings:
+            if isinstance(finding, dict):
+                rows.append(_finding_row(source, draft_id, finding))
+    return rows
+
+
+def _finding_text(value: object) -> str | None:
+    if isinstance(value, str):
+        return value
+    return None
+
+
+def _finding_row(source: dict[str, str], draft_id: object, finding: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "run_id": source["run_id"],
+        "brief_id": source["brief_id"],
+        "version": source["version"],
+        "draft_id": draft_id if isinstance(draft_id, str) else None,
+        "rule_id": _finding_text(finding.get("rule_id")),
+        "severity": _finding_text(finding.get("severity")),
+        "evidence": _finding_text(finding.get("evidence")),
+        "message": _finding_text(finding.get("message")),
+        "suggestion": _finding_text(finding.get("suggestion")),
+        "channel": source["channel"],
+        "channel_label": source["channel_label"],
+    }
+
+
+def _finding_source_matches(source: dict[str, str], *, channel: str | None, brief: str | None) -> bool:
+    if brief is not None and source["brief_id"] != brief:
+        return False
+    if channel is None:
+        return True
+    return _channel_query_matches(source["channel"], source["channel_label"], channel)
+
+
+def _channel_query_matches(channel: str, label: str, query: str) -> bool:
+    """Match a channel query the way ``list-briefs`` does.
+
+    Canonical ids, Chinese labels, and ``CHANNEL_ALIASES`` all count. An index
+    without a channel is the string ``unknown`` and only matches that text.
+    """
+    text = query.strip()
+    if text == channel or text == label:
+        return True
+    canonical = CHANNEL_ALIASES.get(text) or CHANNEL_ALIASES.get(text.lower())
+    return bool(canonical) and canonical == channel
+
+
+def _finding_row_matches(
+    row: dict[str, Any],
+    *,
+    rule: str | None,
+    severity: str | None,
+    draft: str | None,
+) -> bool:
+    if rule is not None and row.get("rule_id") != rule:
+        return False
+    if severity is not None and row.get("severity") != severity:
+        return False
+    if draft is not None and row.get("draft_id") != draft:
+        return False
+    return True
+
+
+def _bucket_name(value: object) -> str:
+    if isinstance(value, str) and value:
+        return value
+    return "unknown"
+
+
+def _ranked_named_counts(names: list[str], field: str) -> list[dict[str, Any]]:
+    counts: dict[str, int] = {}
+    for name in names:
+        counts[name] = counts.get(name, 0) + 1
+    ordered = sorted(counts, key=lambda name: (-counts[name], name))
+    return [{field: name, "count": counts[name]} for name in ordered]
 
 
 def _saved_run_row(out: Path, name: str) -> dict[str, Any] | None:

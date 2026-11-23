@@ -7,6 +7,7 @@ import pytest
 
 from mcw.cli import main
 from mcw.scoring.rubric import DIMENSIONS, OFFLINE_SCORE_NOTE
+from mcw.store import FINDINGS_INVENTORY_NOTE
 
 
 def test_offline_commands(briefs_dir: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -1166,6 +1167,286 @@ def test_failures_help(capsys: pytest.CaptureFixture[str]) -> None:
     code = main(["--help"])
     assert code == 0
     assert "failures" in capsys.readouterr().out
+
+
+def test_list_findings_empty(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    out = tmp_path / "empty"
+    code = main(["list-findings", "--out", str(out)])
+    assert code == 0
+    captured = capsys.readouterr()
+    assert "没有发现" in captured.out
+    assert "runs: 0" in captured.out
+    assert "with_findings: 0" in captured.out
+    assert "without_findings: 0" in captured.out
+    assert "listed: 0" in captured.out
+    assert FINDINGS_INVENTORY_NOTE in captured.out
+    assert captured.err == ""
+
+    code = main(["list-findings", "--out", str(out), "--json"])
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["findings"] == []
+    assert payload["skipped"] == []
+    assert payload["n"] == 0
+    assert payload["n_listed"] == 0
+    assert payload["kind"] == "stored_checklist_findings"
+    assert payload["note"] == FINDINGS_INVENTORY_NOTE
+    assert payload["not_business_conversion"] is True
+
+    junk_only = tmp_path / "junk-only"
+    (junk_only / "runs" / "nope").mkdir(parents=True)
+    code = main(["list-findings", "--out", str(junk_only)])
+    assert code == 0
+    captured = capsys.readouterr()
+    assert "没有发现" in captured.out
+    assert "nope" not in captured.out
+    assert "跳过无效运行目录: nope" in captured.err
+
+
+def test_list_findings_text_json_and_filters(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    out = tmp_path / "out"
+    _write_finding_run(
+        out,
+        "zzz",
+        "coffee-wechat",
+        "2024-01-01T00:00:00+00:00",
+        "wechat",
+        "微信公众号",
+        [
+            {
+                "draft_id": "z-b",
+                "passed": False,
+                "summary": "",
+                "findings": [
+                    {
+                        "rule_id": "absolute_claim",
+                        "severity": "high",
+                        "message": "绝对化用语",
+                        "evidence": "全网第一",
+                        "suggestion": "删掉",
+                    },
+                    "skip",
+                ],
+            },
+            {
+                "draft_id": "z-a",
+                "passed": True,
+                "summary": "",
+                "findings": [
+                    {
+                        "rule_id": "tone",
+                        "severity": "medium",
+                        "message": "语气偏硬",
+                        "evidence": "",
+                        "suggestion": "改语气",
+                    }
+                ],
+            },
+        ],
+    )
+    _write_finding_run(
+        out,
+        "aaa",
+        "sunscreen-xhs",
+        "2024-05-01T00:00:00+00:00",
+        "xiaohongshu",
+        "小红书",
+        [
+            {"draft_id": "a-a", "passed": True, "summary": "", "findings": []},
+            {
+                "draft_id": "a-b",
+                "passed": False,
+                "summary": "",
+                "findings": [{"rule_id": "tone", "severity": "medium"}],
+            },
+        ],
+    )
+    (out / "runs" / "nope").mkdir(parents=True)
+    before = _snapshot(out)
+    code = main(["list-findings", "--out", str(out)])
+    assert code == 0
+    assert _snapshot(out) == before
+    captured = capsys.readouterr()
+    assert "跳过无效运行目录: nope" in captured.err
+    text = captured.out
+    assert "没有发现" not in text
+    assert "zzz | coffee-wechat | v1 | z-b | absolute_claim | high | 全网第一" in text
+    assert "zzz | coffee-wechat | v1 | z-a | tone | medium | —" in text
+    assert "aaa | sunscreen-xhs | v1 | a-b | tone | medium | —" in text
+    assert text.index("zzz |") < text.index("aaa |")
+    assert "runs: 2" in text
+    assert "with_findings: 2" in text
+    assert "without_findings: 0" in text
+    assert "listed: 3" in text
+    assert "by_rule: tone 2, absolute_claim 1" in text
+    assert "by_severity: medium 2, high 1" in text
+    assert f"note: {FINDINGS_INVENTORY_NOTE}" in text
+
+    code = main(["list-findings", "--out", str(out), "--json"])
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["n_listed"] == 3
+    assert payload["not_business_conversion"] is True
+    assert payload["note"] == FINDINGS_INVENTORY_NOTE
+    assert payload["skipped"] == ["nope"]
+    row = payload["findings"][0]
+    assert row["suggestion"] == "删掉"
+    assert row["channel"] == "wechat"
+    assert row["channel_label"] == "微信公众号"
+    assert payload["findings"][2]["evidence"] is None
+    assert payload["findings"][2]["draft_id"] == "a-b"
+    assert payload["filters"]["rule"] is None
+
+    code = main(["list-findings", "--rule", "tone", "--severity", "medium", "--channel", "xhs", "--out", str(out)])
+    assert code == 0
+    filtered = capsys.readouterr().out
+    assert "aaa | sunscreen-xhs | v1 | a-b | tone | medium | —" in filtered
+    assert "absolute_claim" not in filtered
+    assert "zzz |" not in filtered
+    assert "with_findings: 2" in filtered
+    assert "listed: 1" in filtered
+
+    code = main(
+        ["list-findings", "--rule", "absolute_claim", "--severity", "medium", "--out", str(out)]
+    )
+    assert code == 0
+    empty = capsys.readouterr().out
+    assert "没有发现" in empty
+    assert "with_findings: 2" in empty
+    assert "without_findings: 0" in empty
+    assert "listed: 0" in empty
+    assert "by_rule: —" in empty
+
+    code = main(["list-findings", "--channel", "unknown", "--out", str(out), "--json"])
+    assert code == 0
+    unknown = json.loads(capsys.readouterr().out)
+    assert unknown["findings"] == []
+    assert unknown["n_with_findings"] == 2
+    assert unknown["n_listed"] == 0
+
+
+def test_list_findings_named_missing_run_exits_2(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    out = tmp_path / "out"
+    _write_finding_run(
+        out,
+        "sun",
+        "sunscreen-xhs",
+        "2024-01-01T00:00:00+00:00",
+        "xiaohongshu",
+        "小红书",
+        [{"draft_id": "v1-a", "passed": True, "summary": "", "findings": []}],
+    )
+    code = main(["list-findings", "missing-run", "--out", str(out)])
+    assert code == 2
+    assert "找不到运行" in capsys.readouterr().err
+
+    code = main(["list-findings", "sun", "--version", "v9", "--out", str(out)])
+    assert code == 2
+    assert "版本索引里没有 v9" in capsys.readouterr().err
+
+    code = main(["list-findings", "--version", "v1", "--out", str(out)])
+    assert code == 2
+    assert "--version" in capsys.readouterr().err
+
+
+def test_list_findings_mock_run_has_no_rows_and_does_not_call_a_model(
+    briefs_dir: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("list-findings must not call a model or rescore")
+
+    out = tmp_path / "out"
+    assert (
+        main(
+            [
+                "run",
+                str(briefs_dir / "sunscreen-xhs.yaml"),
+                "--mock",
+                "--run-id",
+                "demo-sunscreen",
+                "--out",
+                str(out),
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    before = _snapshot(out)
+    monkeypatch.setattr("mcw.cli.rescore_version", fail)
+    monkeypatch.setattr("mcw.store.score_text_card", fail)
+    monkeypatch.setattr("mcw.scoring.rubric.score_text", fail)
+    monkeypatch.setattr("mcw.risk.rules.run_rules", fail)
+    monkeypatch.setattr("urllib.request.urlopen", fail)
+    code = main(["list-findings", "--out", str(out)])
+    assert code == 0
+    assert _snapshot(out) == before
+    captured = capsys.readouterr()
+    assert "没有发现" in captured.out
+    assert "demo-sunscreen" not in captured.out
+    assert FINDINGS_INVENTORY_NOTE in captured.out
+    assert "with_findings: 0" in captured.out
+    assert captured.err == ""
+
+
+def test_list_findings_help(capsys: pytest.CaptureFixture[str]) -> None:
+    code = main(["list-findings", "--help"])
+    assert code == 0
+    text = capsys.readouterr().out
+    assert "--out" in text
+    assert "--json" in text
+    assert "--version" in text
+    assert "--rule" in text
+    assert "--severity" in text
+    assert "--channel" in text
+    assert "--draft" in text
+    assert "--brief" in text
+
+    code = main(["--help"])
+    assert code == 0
+    assert "list-findings" in capsys.readouterr().out
+
+
+def _write_finding_run(
+    out: Path,
+    run_id: str,
+    brief_id: str,
+    created_at: str,
+    channel: str,
+    channel_label: str,
+    items: list[dict],
+) -> None:
+    run = out / "runs" / run_id
+    (run / "versions" / "v1").mkdir(parents=True)
+    _write_json(
+        run / "manifest.json",
+        {
+            "run_id": run_id,
+            "brief_id": brief_id,
+            "channel": channel,
+            "channel_label": channel_label,
+        },
+    )
+    _write_json(
+        run / "versions.json",
+        {
+            "run_id": run_id,
+            "versions": [
+                {
+                    "version": "v1",
+                    "created_at": created_at,
+                    "approval_status": "pending",
+                    "overall_score": 100,
+                    "best_draft_id": "recommended",
+                    "channel": channel,
+                    "channel_label": channel_label,
+                }
+            ],
+        },
+    )
+    _write_json(run / "versions" / "v1" / "checklist.json", {"items": items})
 
 
 _VALID_BRIEF = """\
