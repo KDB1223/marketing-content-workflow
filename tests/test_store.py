@@ -7,7 +7,13 @@ import pytest
 
 from mcw.errors import MCWError
 from mcw.scoring.rubric import DIMENSIONS, OFFLINE_SCORE_NOTE
-from mcw.store import inventory_failures, list_saved_runs, summarize_saved_runs
+from mcw.store import (
+    FINDINGS_INVENTORY_NOTE,
+    inventory_failures,
+    inventory_findings,
+    list_saved_runs,
+    summarize_saved_runs,
+)
 
 
 def _write(path: Path, payload: object) -> None:
@@ -755,3 +761,391 @@ def test_inventory_failures_does_not_score(tmp_path: Path, monkeypatch: pytest.M
     )
     payload = inventory_failures(out)
     assert payload["failures"][0]["reasons"] == ["overall_below_100", "rejected"]
+
+
+def test_inventory_findings_empty(tmp_path: Path) -> None:
+    payload = inventory_findings(tmp_path / "missing")
+    assert payload["findings"] == []
+    assert payload["skipped"] == []
+    assert payload["n"] == 0
+    assert payload["n_with_findings"] == 0
+    assert payload["n_without_findings"] == 0
+    assert payload["n_listed"] == 0
+    assert payload["by_rule"] == []
+    assert payload["by_severity"] == []
+    assert payload["filters"] == {
+        "run": None,
+        "version": None,
+        "rule": None,
+        "severity": None,
+        "channel": None,
+        "draft": None,
+        "brief": None,
+    }
+    assert payload["kind"] == "stored_checklist_findings"
+    assert payload["note"] == FINDINGS_INVENTORY_NOTE
+    assert "checklist.json" in payload["note"]
+    assert "转化率" in payload["note"]
+    assert payload["not_business_conversion"] is True
+
+
+def test_inventory_findings_lists_every_draft_and_keeps_counts_under_filters(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("list-findings must not score or call a model")
+
+    monkeypatch.setattr("mcw.scoring.rubric.score_text", fail)
+    monkeypatch.setattr("mcw.store.score_text_card", fail)
+    monkeypatch.setattr("mcw.risk.rules.run_rules", fail)
+    monkeypatch.setattr("urllib.request.urlopen", fail)
+
+    out = tmp_path / "out"
+    _save(
+        out,
+        "zzz",
+        "coffee-wechat",
+        [
+            _version(
+                "v1",
+                overall_score=10,
+                approval_status="pending",
+                best_draft_id="v1-a",
+                created_at="2024-01-01T00:00:00+00:00",
+                channel="wechat",
+                channel_label="微信公众号",
+            ),
+            _version(
+                "v2",
+                overall_score=100,
+                approval_status="pending",
+                best_draft_id="z-a",
+                created_at="2024-01-02T00:00:00+00:00",
+                channel="wechat",
+                channel_label="微信公众号",
+                dimension_scores=_FULL_DIMS,
+            ),
+        ],
+        channel="wechat",
+        channel_label="微信公众号",
+    )
+    _version_artifact(
+        out,
+        "zzz",
+        "v1",
+        "checklist.json",
+        _checklist([_checklist_item("v1-a", False, [_finding("old_only", "high", "旧版", "旧证据")])]),
+    )
+    _version_artifact(
+        out,
+        "zzz",
+        "v2",
+        "checklist.json",
+        _checklist(
+            [
+                _checklist_item(
+                    "z-b",
+                    False,
+                    [
+                        _finding("required_element", "medium", "缺话题", "话题"),
+                        "not-a-dict",
+                        None,
+                        4,
+                        _finding("absolute_claim", "high", "绝对化用语", "全网第一"),
+                        {},
+                    ],
+                ),
+                _checklist_item(
+                    "z-a",
+                    True,
+                    [
+                        {
+                            "rule_id": "tone",
+                            "severity": "medium",
+                            "message": "语气偏硬",
+                            "evidence": "必须",
+                            "suggestion": "改语气",
+                        }
+                    ],
+                ),
+                {"draft_id": "z-c"},
+                "not-an-item",
+                _checklist_item("z-d", True, []),
+                {"draft_id": "z-e", "passed": True, "summary": "", "findings": "nope"},
+            ]
+        ),
+    )
+    _write(
+        out / "runs" / "zzz" / "checklist.json",
+        _checklist([_checklist_item("z-a", False, [_finding("root_only", "high", "根目录", "不读")])]),
+    )
+    _save(
+        out,
+        "quiet",
+        "kidsnack-ecommerce",
+        [
+            _version(
+                "v1",
+                overall_score=100,
+                approval_status="pending",
+                best_draft_id="q-a",
+                created_at="2024-03-01T00:00:00+00:00",
+                dimension_scores=_FULL_DIMS,
+            )
+        ],
+    )
+    _version_artifact(
+        out,
+        "quiet",
+        "v1",
+        "checklist.json",
+        _checklist(
+            [
+                _checklist_item("q-a", True, ["nope", None]),
+                {"draft_id": "q-b", "findings": {}},
+            ]
+        ),
+    )
+    _save(
+        out,
+        "bare",
+        "creditcard-official",
+        [
+            _version(
+                "v1",
+                overall_score=100,
+                approval_status="pending",
+                best_draft_id="b-a",
+                created_at="2024-04-01T00:00:00+00:00",
+                dimension_scores=_FULL_DIMS,
+            )
+        ],
+    )
+    _save(
+        out,
+        "aaa",
+        "sunscreen-xhs",
+        [
+            _version(
+                "v1",
+                overall_score=100,
+                approval_status="pending",
+                best_draft_id="a-a",
+                created_at="2024-05-01T00:00:00+00:00",
+                channel="xiaohongshu",
+                channel_label="小红书",
+                dimension_scores=_FULL_DIMS,
+            )
+        ],
+        channel="xiaohongshu",
+        channel_label="小红书",
+    )
+    _version_artifact(
+        out,
+        "aaa",
+        "v1",
+        "checklist.json",
+        _checklist(
+            [
+                _checklist_item("a-a", True, []),
+                _checklist_item(
+                    "a-b",
+                    False,
+                    [{"rule_id": "tone", "severity": "medium", "message": None, "evidence": None}],
+                ),
+            ]
+        ),
+    )
+    (out / "runs" / "empty-junk").mkdir(parents=True)
+    bad = out / "runs" / "bad-json"
+    bad.mkdir()
+    (bad / "manifest.json").write_text("{", encoding="utf-8")
+    (bad / "versions.json").write_text("{", encoding="utf-8")
+
+    before = _tree(out)
+    payload = inventory_findings(out)
+    assert _tree(out) == before
+    assert inventory_failures(out)["failures"] == []
+    assert payload["skipped"] == list_saved_runs(out)["skipped"]
+    assert payload["n"] == 4
+    assert payload["n_with_findings"] == 2
+    assert payload["n_without_findings"] == 2
+    assert payload["n_listed"] == 5
+    assert [row["run_id"] for row in payload["findings"]] == ["zzz", "zzz", "zzz", "zzz", "aaa"]
+    assert [row["draft_id"] for row in payload["findings"]] == ["z-b", "z-b", "z-b", "z-a", "a-b"]
+    assert [row["rule_id"] for row in payload["findings"]] == [
+        "required_element",
+        "absolute_claim",
+        None,
+        "tone",
+        "tone",
+    ]
+    assert payload["findings"][0]["version"] == "v2"
+    assert payload["findings"][0]["channel"] == "wechat"
+    assert payload["findings"][0]["channel_label"] == "微信公众号"
+    assert payload["findings"][3]["suggestion"] == "改语气"
+    assert payload["findings"][3]["message"] == "语气偏硬"
+    assert payload["findings"][4]["evidence"] is None
+    assert payload["findings"][4]["message"] is None
+    assert payload["findings"][4]["suggestion"] is None
+    assert payload["findings"][4]["channel"] == "xiaohongshu"
+    assert "old_only" not in json.dumps(payload["findings"], ensure_ascii=False)
+    assert "root_only" not in json.dumps(payload["findings"], ensure_ascii=False)
+    assert payload["by_rule"] == [
+        {"rule_id": "tone", "count": 2},
+        {"rule_id": "absolute_claim", "count": 1},
+        {"rule_id": "required_element", "count": 1},
+        {"rule_id": "unknown", "count": 1},
+    ]
+    assert payload["by_severity"] == [
+        {"severity": "medium", "count": 3},
+        {"severity": "high", "count": 1},
+        {"severity": "unknown", "count": 1},
+    ]
+    assert payload["note"] == FINDINGS_INVENTORY_NOTE
+    assert payload["not_business_conversion"] is True
+
+    tone = inventory_findings(out, rule="tone", severity="medium")
+    assert [row["draft_id"] for row in tone["findings"]] == ["z-a", "a-b"]
+    assert tone["n"] == payload["n"]
+    assert tone["n_with_findings"] == payload["n_with_findings"]
+    assert tone["n_without_findings"] == payload["n_without_findings"]
+    assert tone["n_listed"] == 2
+    assert tone["by_rule"] == [{"rule_id": "tone", "count": 2}]
+    assert tone["filters"]["rule"] == "tone"
+    assert tone["filters"]["severity"] == "medium"
+
+    missed = inventory_findings(out, rule="absolute_claim", severity="medium")
+    assert missed["findings"] == []
+    assert missed["n_listed"] == 0
+    assert missed["n_with_findings"] == 2
+    assert missed["n_without_findings"] == 2
+    assert missed["by_rule"] == []
+    assert missed["by_severity"] == []
+
+    draft_rows = inventory_findings(out, draft="z-b")
+    assert [row["rule_id"] for row in draft_rows["findings"]] == ["required_element", "absolute_claim", None]
+    assert draft_rows["n_with_findings"] == 2
+
+    brief_rows = inventory_findings(out, brief="sunscreen-xhs")
+    assert [row["run_id"] for row in brief_rows["findings"]] == ["aaa"]
+    assert brief_rows["n_with_findings"] == 2
+
+    for channel in ("xhs", "小红书", "xiaohongshu", " XHS "):
+        matched = inventory_findings(out, channel=channel)
+        assert [row["run_id"] for row in matched["findings"]] == ["aaa"]
+        assert matched["n_with_findings"] == 2
+    for channel in ("wechat", "微信", "微信公众号"):
+        matched = inventory_findings(out, channel=channel)
+        assert [row["run_id"] for row in matched["findings"]] == ["zzz", "zzz", "zzz", "zzz"]
+    unknown = inventory_findings(out, channel="unknown")
+    assert unknown["findings"] == []
+    assert unknown["n"] == 4
+    assert unknown["n_with_findings"] == 2
+    assert unknown["n_without_findings"] == 2
+    assert unknown["n_listed"] == 0
+    combined = inventory_findings(out, channel="xhs", rule="absolute_claim")
+    assert combined["findings"] == []
+    assert combined["n_with_findings"] == 2
+
+    named = inventory_findings(out, run_id="zzz", version="v1")
+    assert named["n"] == 1
+    assert named["n_with_findings"] == 1
+    assert named["n_without_findings"] == 0
+    assert named["skipped"] == []
+    assert [row["rule_id"] for row in named["findings"]] == ["old_only"]
+    assert named["findings"][0]["version"] == "v1"
+    assert named["filters"]["run"] == "zzz"
+    assert named["filters"]["version"] == "v1"
+    latest = inventory_findings(out, run_id="zzz")
+    assert latest["n"] == 1
+    assert [row["rule_id"] for row in latest["findings"]] == [
+        "required_element",
+        "absolute_claim",
+        None,
+        "tone",
+    ]
+    assert "old_only" not in json.dumps(latest["findings"], ensure_ascii=False)
+
+
+def test_inventory_findings_channel_fallback_and_version_tie(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    _save(
+        out,
+        "from-manifest",
+        "fitness-douyin",
+        [_version("v1", overall_score=100, best_draft_id="v1-a", created_at="2024-01-01T00:00:00+00:00")],
+        channel="douyin",
+        channel_label="抖音",
+    )
+    _version_artifact(
+        out,
+        "from-manifest",
+        "v1",
+        "checklist.json",
+        _checklist([_checklist_item("v1-b", False, [_finding("tone", "medium", "口语", "家人们")])]),
+    )
+    _save(
+        out,
+        "tie",
+        "sunscreen-xhs",
+        [
+            _version(
+                "v2",
+                overall_score=100,
+                best_draft_id="v2-a",
+                created_at="2024-02-01T00:00:00+00:00",
+                channel="wechat",
+                channel_label="微信公众号",
+            ),
+            _version(
+                "v2",
+                overall_score=100,
+                best_draft_id="v2-a",
+                created_at="2024-03-01T00:00:00+00:00",
+                channel="xiaohongshu",
+                channel_label="小红书",
+            ),
+        ],
+        channel="wechat",
+        channel_label="微信公众号",
+    )
+    _version_artifact(
+        out,
+        "tie",
+        "v2",
+        "checklist.json",
+        _checklist([_checklist_item("v2-b", False, [_finding("absolute_claim", "high", "绝对化用语", "全网第一")])]),
+    )
+    fallback = inventory_findings(out, run_id="from-manifest")
+    assert fallback["findings"][0]["channel"] == "douyin"
+    assert fallback["findings"][0]["channel_label"] == "抖音"
+    assert fallback["findings"][0]["draft_id"] == "v1-b"
+    assert inventory_findings(out, channel="抖音")["n_listed"] == 1
+    assert inventory_findings(out, channel="unknown", run_id="from-manifest")["findings"] == []
+
+    tied = inventory_findings(out, run_id="tie")
+    assert tied["findings"][0]["channel"] == "xiaohongshu"
+    assert tied["findings"][0]["channel_label"] == "小红书"
+    scanned = inventory_findings(out)
+    tie_rows = [row for row in scanned["findings"] if row["run_id"] == "tie"]
+    assert tie_rows[0]["channel"] == "xiaohongshu"
+
+
+def test_inventory_findings_named_run_errors(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    _save(out, "sun", "sunscreen-xhs", [_version("v1", overall_score=100, approval_status="pending")])
+    with pytest.raises(MCWError, match="找不到运行"):
+        inventory_findings(out, run_id="missing")
+    with pytest.raises(MCWError, match="版本索引里没有 v9"):
+        inventory_findings(out, run_id="sun", version="v9")
+    with pytest.raises(MCWError, match="版本号不合法"):
+        inventory_findings(out, run_id="sun", version="latest")
+    with pytest.raises(MCWError, match="--version 需要同时提供 run id"):
+        inventory_findings(out, version="v1")
+    payload = inventory_findings(out, run_id="sun")
+    assert payload["n"] == 1
+    assert payload["n_with_findings"] == 0
+    assert payload["findings"] == []
+    assert payload["skipped"] == []

@@ -1,4 +1,4 @@
-"""Command line: mcw run | score | compare | list-versions | list-runs | list-briefs | stats | failures.
+"""Command line: mcw run | score | compare | list-versions | list-runs | list-briefs | stats | failures | list-findings.
 
 ``mcw list-briefs`` inventories Brief files in a directory (default ``briefs/``).
 It validates each file with the existing schema loader. It does not call a
@@ -14,6 +14,10 @@ a channel show as unknown.
 ``mcw failures`` lists saved runs whose latest version missed a full offline
 content score, was rejected, or whose recommended draft has a stored checklist
 failure or high-severity finding. It reads saved artifacts only.
+
+``mcw list-findings`` inventories stored checklist findings for every draft in
+the selected version, at every severity. It reads saved artifacts only and
+does not recompute risk rules. The rows are not a conversion rate.
 """
 
 from __future__ import annotations
@@ -38,6 +42,7 @@ from mcw.scoring.rubric import DIMENSIONS, OFFLINE_SCORE_NOTE, score_text
 from mcw.stages.extract import extract
 from mcw.store import (
     inventory_failures,
+    inventory_findings,
     list_saved_runs,
     load_history,
     load_version_files,
@@ -131,6 +136,22 @@ def build_parser() -> argparse.ArgumentParser:
     failures.add_argument("--out", default=".mcw")
     failures.add_argument("--json", action="store_true", dest="as_json")
     failures.set_defaults(handler=cmd_failures)
+
+    findings_help = (
+        "列出已保存清单里的发现，含全部草稿和全部严重级别。"
+        "只读存档，不调用模型，也不重算规则。"
+    )
+    list_findings = sub.add_parser("list-findings", help=findings_help, description=findings_help)
+    list_findings.add_argument("run", nargs="?", default=None, help="只看这一次运行；默认扫描全部")
+    list_findings.add_argument("--version", default=None, help="配合 run id，默认该运行的最新版")
+    list_findings.add_argument("--rule", default=None, help="按 rule_id 精确过滤")
+    list_findings.add_argument("--severity", default=None, help="按严重级别精确过滤")
+    list_findings.add_argument("--channel", default=None, help="按渠道 id、中文名或别名过滤")
+    list_findings.add_argument("--draft", default=None, help="按 draft_id 精确过滤")
+    list_findings.add_argument("--brief", dest="brief_id", default=None, help="按 Brief.id 精确过滤")
+    list_findings.add_argument("--out", default=".mcw")
+    list_findings.add_argument("--json", action="store_true", dest="as_json")
+    list_findings.set_defaults(handler=cmd_list_findings)
     return parser
 
 
@@ -371,6 +392,54 @@ def cmd_failures(args: argparse.Namespace) -> int:
             _print_failure(item)
     print(f"note: {payload['note']}")
     return 0
+
+
+def cmd_list_findings(args: argparse.Namespace) -> int:
+    payload = inventory_findings(
+        Path(args.out),
+        run_id=args.run,
+        version=args.version,
+        rule=args.rule,
+        severity=args.severity,
+        channel=args.channel,
+        draft=args.draft,
+        brief=args.brief_id,
+    )
+    if args.as_json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
+    for name in payload["skipped"]:
+        print(f"跳过无效运行目录: {name}", file=sys.stderr)
+    if not payload["findings"]:
+        print("没有发现")
+    else:
+        for item in payload["findings"]:
+            print(
+                f"{_cell(item.get('run_id'))} | {_cell(item.get('brief_id'))} | "
+                f"{_cell(item.get('version'))} | {_cell(item.get('draft_id'))} | "
+                f"{_cell(item.get('rule_id'))} | {_cell(item.get('severity'))} | "
+                f"{_cell(item.get('evidence'))}"
+            )
+    print(f"runs: {payload['n']}")
+    print(f"with_findings: {payload['n_with_findings']}")
+    print(f"without_findings: {payload['n_without_findings']}")
+    print(f"listed: {payload['n_listed']}")
+    print("by_rule: " + _format_breakdown(payload["by_rule"], "rule_id"))
+    print("by_severity: " + _format_breakdown(payload["by_severity"], "severity"))
+    print(f"note: {payload['note']}")
+    return 0
+
+
+def _cell(value: object) -> str:
+    if isinstance(value, str) and value:
+        return value
+    return "—"
+
+
+def _format_breakdown(rows: list[dict], key: str) -> str:
+    if not rows:
+        return "—"
+    return ", ".join(f"{row[key]} {row['count']}" for row in rows)
 
 
 def _print_failure(item: dict) -> None:

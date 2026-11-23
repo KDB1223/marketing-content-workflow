@@ -149,6 +149,7 @@ python3 -m mcw list-briefs
 python3 -m mcw list-runs
 python3 -m mcw stats
 python3 -m mcw failures
+python3 -m mcw list-findings
 python3 -m mcw compare lab-card --left v1 --right v2
 ```
 
@@ -163,6 +164,8 @@ python3 -m mcw compare lab-card --left v1 --right v2
 `mcw stats` 是同一批存档的汇总：按确认状态、Brief、后端和渠道，给出各组已存储离线分的次数、最小、最大和平均。新运行会把渠道 id 和渠道名写进 `manifest.json` 和 `versions.json`。旧索引没有渠道时记为 `unknown`。它同样只读这两个文件，不调用模型，也不重算量表。这些数字仍是离线内容分，不是投放转化率。
 
 `mcw failures` 是同一批存档里需要复核的子集。推荐稿的离线分缺失或低于 100、确认状态是驳回，或推荐稿的清单未通过、含高风险发现时，这条运行会出现。它先读 `manifest.json` 和 `versions.json`，再读该版本已经写好的 `checklist.json` 和 `scores.json`，打印低于 100 的维度和已保存的高风险项（规则 id、说明、证据）。它不调用模型，也不重算量表。防晒乳这种 pending 且 100 分、清单通过的 Mock 运行不会出现；非推荐变体分数更低，只要推荐稿是干净的，也不会单独把这次运行列出来。这些数字仍是离线内容分，不是投放转化率。
+
+`mcw list-findings` 回答的是另一件事：清单里已经记下了哪些发现。它仍是只读，先读 `manifest.json` 和 `versions.json`，再读选中版本的 `checklist.json`，不调用模型，也不重算规则或量表。和 `failures` 的差别是：`failures` 保持运行级，只看推荐稿上的高风险项，外加未满分或被驳回；`list-findings` 是发现级，选中版本里每一份草稿、每一种严重级别都会列出，非推荐稿上的 medium 也会出现。默认仍是每条运行的最新版本。`mcw list-findings <run> [--version v1]` 只看这一条。`--rule`、`--severity`、`--draft`、`--brief`、`--channel` 同时生效。`--channel` 接受规范渠道 id、中文渠道名或 `CHANNEL_ALIASES` 里的别名（例如 `xhs`）；旧索引没有渠道时是 `unknown`，只匹配 `unknown`。没有命中，或清单里本来就没有发现，都打印 `没有发现`，退出码仍是 0。有发现和没有发现的运行数在过滤之前就算好，过滤只改变列出的行，以及按规则、按严重级别的计数。这些行来自已保存的清单，不是投放转化率。
 
 对照 Markdown 含审阅备注、推荐变体各维加减分、按变体的 unified diff，以及消除或新出现的检查项。开头重复离线分说明，避免把 `+0` 读成「转化没变」或把 `-6` 读成「少卖了 6%」。
 
