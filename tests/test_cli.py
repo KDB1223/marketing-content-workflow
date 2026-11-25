@@ -1726,3 +1726,456 @@ def test_list_briefs_help(capsys: pytest.CaptureFixture[str]) -> None:
     code = main(["--help"])
     assert code == 0
     assert "list-briefs" in capsys.readouterr().out
+
+
+def test_list_drafts_empty(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    out = tmp_path / "empty"
+    code = main(["list-drafts", "--out", str(out)])
+    assert code == 0
+    captured = capsys.readouterr()
+    assert "没有文案" in captured.out
+    assert "runs: 0" in captured.out
+    assert "with_drafts: 0" in captured.out
+    assert "without_drafts: 0" in captured.out
+    assert "listed: 0" in captured.out
+    assert "recommended: 0" in captured.out
+    assert "not_recommended: 0" in captured.out
+    assert OFFLINE_SCORE_NOTE in captured.out
+    assert captured.err == ""
+
+    code = main(["list-drafts", "--out", str(out), "--json"])
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["drafts"] == []
+    assert payload["skipped"] == []
+    assert payload["n"] == 0
+    assert payload["n_listed"] == 0
+    assert payload["kind"] == "stored_drafts"
+    assert payload["note"] == OFFLINE_SCORE_NOTE
+    assert payload["not_business_conversion"] is True
+
+    junk_only = tmp_path / "junk-only"
+    (junk_only / "runs" / "nope").mkdir(parents=True)
+    code = main(["list-drafts", "--out", str(junk_only)])
+    assert code == 0
+    captured = capsys.readouterr()
+    assert "没有文案" in captured.out
+    assert "nope" not in captured.out
+    assert "跳过无效运行目录: nope" in captured.err
+
+
+def test_list_drafts_text_json_and_filters(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    out = tmp_path / "out"
+    _write_draft_run(
+        out,
+        "zzz",
+        "coffee-wechat",
+        "2024-01-01T00:00:00+00:00",
+        "wechat",
+        "微信公众号",
+        [
+            "skip",
+            None,
+            {"id": "z-b", "variant": "B", "angle": "痛点", "char_count": 80},
+            {"id": "z-a", "variant": "A", "angle": "清单", "char_count": 90},
+            {"id": "z-c", "variant": "C", "angle": "", "char_count": 70},
+        ],
+        "z-a",
+        scores=[
+            {"draft_id": "z-b", "variant": "B", "angle": "痛点", "score": {"overall": 70}},
+            {"draft_id": "z-a", "variant": "A", "angle": "清单", "score": {"overall": 100}},
+        ],
+        checklist_items=[
+            {
+                "draft_id": "z-b",
+                "passed": False,
+                "findings": [{"rule_id": "absolute_claim", "severity": "high"}, "skip"],
+            },
+            {"draft_id": "z-a", "passed": True, "findings": []},
+        ],
+    )
+    _write_draft_run(
+        out,
+        "aaa",
+        "sunscreen-xhs",
+        "2024-05-01T00:00:00+00:00",
+        "xiaohongshu",
+        "小红书",
+        [
+            {"id": "a-b", "variant": "B", "angle": "场景", "char_count": 40},
+            {"id": "a-a", "variant": "A", "angle": "痛点", "char_count": 50},
+        ],
+        "a-a",
+        scores=[
+            {"draft_id": "a-b", "variant": "B", "angle": "场景", "score": {"overall": 88}},
+            {"draft_id": "a-a", "variant": "A", "angle": "痛点", "score": {"overall": 100}},
+        ],
+        checklist_items=[
+            {"draft_id": "a-b", "passed": False, "findings": [{"severity": "medium"}]},
+            {"draft_id": "a-a", "passed": True, "findings": []},
+        ],
+    )
+    _write_draft_run(
+        out,
+        "bare",
+        "kidsnack-ecommerce",
+        "2024-06-01T00:00:00+00:00",
+        None,
+        None,
+        [{"id": "bare-a", "variant": "A", "angle": "配料", "char_count": 12}],
+        "bare-a",
+        include_scores=False,
+        include_checklist=False,
+    )
+    (out / "runs" / "nope").mkdir(parents=True)
+    before = _snapshot(out)
+    code = main(["list-drafts", "--out", str(out)])
+    assert code == 0
+    assert _snapshot(out) == before
+    captured = capsys.readouterr()
+    assert "跳过无效运行目录: nope" in captured.err
+    text = captured.out
+    assert "没有文案" not in text
+    assert "skip" not in text
+    assert "zzz | coffee-wechat | v1 | z-b | B | 痛点 | chars 80 | overall 70 | — | checklist failed | high 1" in text
+    assert (
+        "zzz | coffee-wechat | v1 | z-a | A | 清单 | chars 90 | overall 100 | recommended | checklist passed | high 0"
+        in text
+    )
+    assert "zzz | coffee-wechat | v1 | z-c | C | — | chars 70 | overall — | — | checklist — | high —" in text
+    assert (
+        "aaa | sunscreen-xhs | v1 | a-b | B | 场景 | chars 40 | overall 88 | — | checklist failed | high 0"
+        in text
+    )
+    assert (
+        "aaa | sunscreen-xhs | v1 | a-a | A | 痛点 | chars 50 | overall 100 | recommended | checklist passed | high 0"
+        in text
+    )
+    assert (
+        "bare | kidsnack-ecommerce | v1 | bare-a | A | 配料 | chars 12 | overall — | recommended | checklist — | high —"
+        in text
+    )
+    assert text.index("zzz |") < text.index("aaa |") < text.index("bare |")
+    assert "runs: 3" in text
+    assert "with_drafts: 3" in text
+    assert "without_drafts: 0" in text
+    assert "listed: 6" in text
+    assert "recommended: 3" in text
+    assert "not_recommended: 3" in text
+    assert "by_brief: coffee-wechat 3, sunscreen-xhs 2, kidsnack-ecommerce 1" in text
+    assert "by_channel: wechat 3, xiaohongshu 2, unknown 1" in text
+    assert "by_variant: A 3, B 2, C 1" in text
+    assert f"note: {OFFLINE_SCORE_NOTE}" in text
+
+    code = main(["list-drafts", "--out", str(out), "--json"])
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["n_listed"] == 6
+    assert payload["not_business_conversion"] is True
+    assert payload["note"] == OFFLINE_SCORE_NOTE
+    assert payload["skipped"] == ["nope"]
+    assert payload["drafts"][2]["angle"] == ""
+    assert payload["drafts"][2]["overall"] is None
+    assert payload["drafts"][2]["checklist_passed"] is None
+    assert payload["drafts"][5]["channel"] == "unknown"
+    assert payload["drafts"][5]["high_finding_count"] is None
+    assert payload["filters"]["draft"] is None
+
+    code = main(
+        [
+            "list-drafts",
+            "--draft",
+            "a-b",
+            "--variant",
+            "B",
+            "--channel",
+            "xhs",
+            "--brief",
+            "sunscreen-xhs",
+            "--out",
+            str(out),
+        ]
+    )
+    assert code == 0
+    filtered = capsys.readouterr().out
+    assert "aaa | sunscreen-xhs | v1 | a-b | B | 场景 | chars 40 | overall 88 | — | checklist failed | high 0" in filtered
+    assert "zzz |" not in filtered
+    assert "bare |" not in filtered
+    assert "with_drafts: 3" in filtered
+    assert "listed: 1" in filtered
+    assert "recommended: 0" in filtered
+    assert "not_recommended: 1" in filtered
+
+    code = main(["list-drafts", "--draft", "a-b", "--variant", "A", "--out", str(out)])
+    assert code == 0
+    empty = capsys.readouterr().out
+    assert "没有文案" in empty
+    assert "with_drafts: 3" in empty
+    assert "without_drafts: 0" in empty
+    assert "listed: 0" in empty
+    assert "by_brief: —" in empty
+
+    code = main(["list-drafts", "--channel", "unknown", "--out", str(out), "--json"])
+    assert code == 0
+    unknown = json.loads(capsys.readouterr().out)
+    assert [row["draft_id"] for row in unknown["drafts"]] == ["bare-a"]
+    assert unknown["n_with_drafts"] == 3
+    assert unknown["n_listed"] == 1
+
+
+def test_list_drafts_named_missing_run_exits_2(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    out = tmp_path / "out"
+    _write_draft_run(
+        out,
+        "sun",
+        "sunscreen-xhs",
+        "2024-01-01T00:00:00+00:00",
+        "xiaohongshu",
+        "小红书",
+        [{"id": "v1-a", "variant": "A", "angle": "痛点", "char_count": 10}],
+        "v1-a",
+        include_scores=False,
+        include_checklist=False,
+    )
+    code = main(["list-drafts", "missing-run", "--out", str(out)])
+    assert code == 2
+    assert "找不到运行" in capsys.readouterr().err
+
+    code = main(["list-drafts", "sun", "--version", "v9", "--out", str(out)])
+    assert code == 2
+    assert "版本索引里没有 v9" in capsys.readouterr().err
+
+    code = main(["list-drafts", "--version", "v1", "--out", str(out)])
+    assert code == 2
+    assert "--version 需要同时提供 run id" in capsys.readouterr().err
+
+    broken = out / "runs" / "broken"
+    broken.mkdir()
+    (broken / "manifest.json").write_text("{", encoding="utf-8")
+    (broken / "versions.json").write_text("{", encoding="utf-8")
+    code = main(["list-drafts", "broken", "--out", str(out)])
+    assert code == 2
+    assert "无法读取" in capsys.readouterr().err
+
+
+def test_list_drafts_selects_latest_version(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    out = tmp_path / "out"
+    run = out / "runs" / "sun"
+    for version, draft_id, overall in (("v1", "old-a", 11), ("v2", "new-a", 22)):
+        directory = run / "versions" / version
+        directory.mkdir(parents=True)
+        _write_json(
+            directory / "drafts.json",
+            {"drafts": [{"id": draft_id, "variant": "A", "angle": version, "char_count": 3}]},
+        )
+        _write_json(
+            directory / "scores.json",
+            {
+                "drafts": [
+                    {
+                        "draft_id": draft_id,
+                        "variant": "A",
+                        "angle": version,
+                        "score": {"overall": overall},
+                    }
+                ]
+            },
+        )
+    _write_json(
+        run / "manifest.json",
+        {"run_id": "sun", "brief_id": "sunscreen-xhs", "channel": "xiaohongshu", "channel_label": "小红书"},
+    )
+    _write_json(
+        run / "versions.json",
+        {
+            "run_id": "sun",
+            "versions": [
+                {
+                    "version": "v1",
+                    "created_at": "2024-01-01T00:00:00+00:00",
+                    "best_draft_id": "old-a",
+                    "channel": "wechat",
+                    "channel_label": "微信公众号",
+                },
+                {
+                    "version": "v2",
+                    "created_at": "2024-02-01T00:00:00+00:00",
+                    "best_draft_id": "new-a",
+                    "channel": "xiaohongshu",
+                    "channel_label": "小红书",
+                },
+            ],
+        },
+    )
+    _write_json(run / "drafts.json", {"drafts": [{"id": "root-only", "variant": "A", "angle": "根", "char_count": 1}]})
+    quiet = out / "runs" / "quiet"
+    (quiet / "versions" / "v1").mkdir(parents=True)
+    _write_json(quiet / "manifest.json", {"run_id": "quiet", "brief_id": "coffee-wechat"})
+    _write_json(
+        quiet / "versions.json",
+        {
+            "run_id": "quiet",
+            "versions": [
+                {"version": "v1", "created_at": "2024-03-01T00:00:00+00:00", "best_draft_id": "q-a"}
+            ],
+        },
+    )
+
+    code = main(["list-drafts", "--out", str(out)])
+    assert code == 0
+    text = capsys.readouterr().out
+    assert "sun | sunscreen-xhs | v2 | new-a | A | v2 | chars 3 | overall 22 | recommended" in text
+    assert "old-a" not in text
+    assert "root-only" not in text
+    assert "runs: 2" in text
+    assert "with_drafts: 1" in text
+    assert "without_drafts: 1" in text
+    assert "listed: 1" in text
+
+    code = main(["list-drafts", "sun", "--version", "v1", "--out", str(out), "--json"])
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["n"] == 1
+    assert payload["drafts"][0]["draft_id"] == "old-a"
+    assert payload["drafts"][0]["version"] == "v1"
+    assert payload["drafts"][0]["overall"] == 11
+    assert payload["drafts"][0]["channel"] == "wechat"
+    assert payload["drafts"][0]["recommended"] is True
+    assert "new-a" not in json.dumps(payload["drafts"], ensure_ascii=False)
+
+
+def test_list_drafts_mock_run_lists_every_draft_and_does_not_call_a_model(
+    briefs_dir: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("list-drafts must not call a model or rescore")
+
+    out = tmp_path / "out"
+    assert (
+        main(
+            [
+                "run",
+                str(briefs_dir / "sunscreen-xhs.yaml"),
+                "--mock",
+                "--run-id",
+                "demo-sunscreen",
+                "--out",
+                str(out),
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    root = out / "runs" / "demo-sunscreen" / "versions" / "v1"
+    stored = json.loads((root / "drafts.json").read_text(encoding="utf-8"))
+    scores = json.loads((root / "scores.json").read_text(encoding="utf-8"))
+    checklist = json.loads((root / "checklist.json").read_text(encoding="utf-8"))
+    assert len(stored["drafts"]) == 3
+    before = _snapshot(out)
+    monkeypatch.setattr("mcw.cli.rescore_version", fail)
+    monkeypatch.setattr("mcw.store.score_text_card", fail)
+    monkeypatch.setattr("mcw.scoring.rubric.score_text", fail)
+    monkeypatch.setattr("mcw.risk.rules.run_rules", fail)
+    monkeypatch.setattr("mcw.textutil.char_count", fail)
+    monkeypatch.setattr("urllib.request.urlopen", fail)
+    code = main(["list-drafts", "--out", str(out)])
+    assert code == 0
+    assert _snapshot(out) == before
+    captured = capsys.readouterr()
+    text = captured.out
+    assert captured.err == ""
+    assert "没有文案" not in text
+    assert OFFLINE_SCORE_NOTE in text
+    assert "listed: 3" in text
+    assert "recommended: 1" in text
+    assert "not_recommended: 2" in text
+    best_id = scores["best_draft_id"]
+    best_seen = False
+    for draft in stored["drafts"]:
+        assert draft["id"] in text
+        line = next(line for line in text.splitlines() if draft["id"] in line)
+        if draft["id"] == best_id:
+            assert "recommended" in line
+            best_seen = True
+        else:
+            assert "recommended" not in line
+    assert best_seen
+    assert len({item["draft_id"] for item in checklist["items"]}) == 3
+
+    code = main(["list-drafts", "--out", str(out), "--json"])
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["not_business_conversion"] is True
+    assert payload["note"] == OFFLINE_SCORE_NOTE
+    assert [row["draft_id"] for row in payload["drafts"]] == [item["id"] for item in stored["drafts"]]
+    assert [row["variant"] for row in payload["drafts"]] == [item["variant"] for item in stored["drafts"]]
+    assert [row["char_count"] for row in payload["drafts"]] == [item["char_count"] for item in stored["drafts"]]
+    stored_overall = {item["draft_id"]: item["score"]["overall"] for item in scores["drafts"]}
+    assert [row["overall"] for row in payload["drafts"]] == [
+        stored_overall[item["id"]] for item in stored["drafts"]
+    ]
+    assert sum(1 for row in payload["drafts"] if row["recommended"]) == 1
+    assert next(row["draft_id"] for row in payload["drafts"] if row["recommended"]) == best_id
+    assert all(row["checklist_passed"] is True for row in payload["drafts"])
+    assert all(row["high_finding_count"] == 0 for row in payload["drafts"])
+
+
+def test_list_drafts_help(capsys: pytest.CaptureFixture[str]) -> None:
+    code = main(["list-drafts", "--help"])
+    assert code == 0
+    text = capsys.readouterr().out
+    assert "--out" in text
+    assert "--json" in text
+    assert "--version" in text
+    assert "--draft" in text
+    assert "--variant" in text
+    assert "--channel" in text
+    assert "--brief" in text
+
+    code = main(["--help"])
+    assert code == 0
+    assert "list-drafts" in capsys.readouterr().out
+
+
+def _write_draft_run(
+    out: Path,
+    run_id: str,
+    brief_id: str,
+    created_at: str,
+    channel: str | None,
+    channel_label: str | None,
+    drafts: list,
+    best_draft_id: str,
+    *,
+    scores: list | None = None,
+    checklist_items: list | None = None,
+    include_scores: bool = True,
+    include_checklist: bool = True,
+) -> None:
+    run = out / "runs" / run_id
+    version_dir = run / "versions" / "v1"
+    version_dir.mkdir(parents=True, exist_ok=True)
+    manifest: dict = {"run_id": run_id, "brief_id": brief_id}
+    record: dict = {
+        "version": "v1",
+        "created_at": created_at,
+        "approval_status": "pending",
+        "overall_score": 100,
+        "best_draft_id": best_draft_id,
+    }
+    if channel is not None:
+        manifest["channel"] = channel
+        record["channel"] = channel
+    if channel_label is not None:
+        manifest["channel_label"] = channel_label
+        record["channel_label"] = channel_label
+    _write_json(run / "manifest.json", manifest)
+    _write_json(run / "versions.json", {"run_id": run_id, "versions": [record]})
+    _write_json(version_dir / "drafts.json", {"drafts": drafts})
+    if include_scores:
+        _write_json(version_dir / "scores.json", {"best_draft_id": best_draft_id, "drafts": scores or []})
+    if include_checklist:
+        _write_json(version_dir / "checklist.json", {"items": checklist_items or []})

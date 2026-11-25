@@ -35,6 +35,8 @@ jobs:
           python -m mcw failures --out .mcw | tee /tmp/mcw-failures.txt
           python -m mcw list-findings --out .mcw | tee /tmp/mcw-list-findings.txt
           python -m mcw list-findings --out .mcw --json > /tmp/mcw-list-findings.json
+          python -m mcw list-drafts --out .mcw | tee /tmp/mcw-list-drafts.txt
+          python -m mcw list-drafts --out .mcw --json > /tmp/mcw-list-drafts.json
           python - <<'PY'
           import json
           from pathlib import Path
@@ -98,5 +100,38 @@ jobs:
           assert findings_payload["n_listed"] == 0
           assert findings_payload["not_business_conversion"] is True
           assert "转化率" in findings_payload["note"]
+          history = json.loads((root / "versions.json").read_text(encoding="utf-8"))
+          assert history["versions"][-1]["version"] == "v2"
+          stored_drafts = json.loads((root / "versions" / "v2" / "drafts.json").read_text(encoding="utf-8"))
+          stored_scores = json.loads((root / "versions" / "v2" / "scores.json").read_text(encoding="utf-8"))
+          assert len(stored_drafts["drafts"]) == 3
+          draft_text = Path("/tmp/mcw-list-drafts.txt").read_text(encoding="utf-8")
+          assert "ci-sunscreen" in draft_text
+          assert "离线内容分" in draft_text
+          assert "转化率" in draft_text
+          best_id = stored_scores["best_draft_id"]
+          best_lines = [line for line in draft_text.splitlines() if best_id in line]
+          assert best_lines and "recommended" in best_lines[0]
+          for stored in stored_drafts["drafts"]:
+              assert stored["id"] in draft_text
+              if stored["id"] != best_id:
+                  other = next(line for line in draft_text.splitlines() if stored["id"] in line)
+                  assert "recommended" not in other
+          drafts_payload = json.loads(Path("/tmp/mcw-list-drafts.json").read_text(encoding="utf-8"))
+          assert drafts_payload["not_business_conversion"] is True
+          assert "转化率" in drafts_payload["note"]
+          assert "离线内容分" in drafts_payload["note"]
+          listed = drafts_payload["drafts"]
+          assert drafts_payload["n_listed"] == len(listed) == 3
+          assert [row["run_id"] for row in listed] == ["ci-sunscreen", "ci-sunscreen", "ci-sunscreen"]
+          assert [row["version"] for row in listed] == ["v2", "v2", "v2"]
+          assert [row["draft_id"] for row in listed] == [item["id"] for item in stored_drafts["drafts"]]
+          assert sum(1 for row in listed if row["recommended"]) == 1
+          assert next(row["draft_id"] for row in listed if row["recommended"]) == best_id
+          stored_overall = {
+              item["draft_id"]: item["score"]["overall"] for item in stored_scores["drafts"]
+          }
+          for row in listed:
+              assert row["overall"] == stored_overall[row["draft_id"]]
           print("ci demo ok", len(drafts["drafts"]))
           PY

@@ -22,6 +22,7 @@ python3 -m mcw list-runs
 python3 -m mcw stats
 python3 -m mcw failures
 python3 -m mcw list-findings
+python3 -m mcw list-drafts
 ```
 
 No API key. A run finishes in seconds and writes `.mcw/runs/demo-sunscreen/`:
@@ -99,6 +100,7 @@ Weights: 卖点准确 0.35, 渠道适配 0.25, 合规 0.25, 可读性 0.15. `mcw
 | `mcw stats` | Stored offline scores rolled up by approval, Brief, backend, and channel |
 | `mcw failures` | Saved runs that missed full credit, were rejected, or have a stored high-severity finding |
 | `mcw list-findings [run]` | Stored checklist findings on every draft, at every severity |
+| `mcw list-drafts [run]` | Stored drafts in the selected version, including ones that were not recommended |
 
 `--json` is available on every command. `--variants` accepts 1–5. Run ids are a single path segment (`^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$`).
 
@@ -111,6 +113,8 @@ Weights: 卖点准确 0.35, 渠道适配 0.25, 合规 0.25, 可读性 0.15. `mcw
 `mcw failures` lists the saved runs a reviewer still needs to look at. A latest version is included when the recommended draft's stored offline score is missing or below 100, when approval is `rejected`, or when that draft's stored checklist failed or has a high-severity finding. Pass `mcw failures <run> [--version v1]` to inspect one version. It reads `manifest.json` and `versions.json` first, then that version's `checklist.json` and `scores.json` for dimension drops and stored findings. It does not call a model or recompute the rubric. A pending run that already scored 100, with a passing checklist and no high finding, is left out, even if another variant scored lower. The numbers are stored offline content scores, not conversion rates.
 
 `mcw list-findings` inventories findings already stored in `checklist.json`. The default scan is every saved run's latest version, chosen the same way as `mcw list-runs` (highest version number; ties keep the later index). `mcw list-findings <run> [--version v1]` reads one version. It walks every draft in that version, not only `best_draft_id`, and every severity, not only high. `--rule`, `--severity`, `--draft`, and `--brief` are exact matches. `--channel` matches a canonical id (`xiaohongshu`), the Chinese label (`小红书`), or an alias from `CHANNEL_ALIASES` such as `xhs`. An older index without a channel is `unknown` and only matches `unknown`. The filters combine. A filter that matches nothing prints `没有发现` and exits 0. The same line is printed when the loaded checklists contain no findings. Invalid run directories are skipped and named on stderr. Runs that loaded are counted before filters (`with_findings` / `without_findings`); `listed`, `by_rule`, and `by_severity` count only the rows that remain. It reads `manifest.json` and `versions.json` first, then that version's `checklist.json`. It does not call a model, recompute risk rules, or write files. The rows are stored checklist findings, not a conversion rate.
+
+`mcw list-drafts` catalogs every stored draft in the selected version, including drafts that were not recommended. The default scan is every saved run's latest version, chosen the same way as `mcw list-runs` (highest version number; ties keep the later index). `mcw list-drafts <run> [--version v1]` reads one version. It reads `manifest.json` and `versions.json` first, then that version's `drafts.json`, and walks every draft in file order, not only `best_draft_id`. `scores.json` and `checklist.json` are joined by draft id when those files can be read. A missing or unreadable score or checklist file keeps the row and leaves those fields empty. If `drafts.json` is missing or has no list, the command uses the `drafts` list in `scores.json`, then `variant_scores` on the version index. Non-dict entries are skipped. `--draft`, `--variant`, and `--brief` are exact matches. `--channel` matches a canonical id (`xiaohongshu`), the Chinese label (`小红书`), or an alias from `CHANNEL_ALIASES` such as `xhs`. An older index without a channel is `unknown` and only matches `unknown`. The filters combine. A filter that matches nothing prints `没有文案` and exits 0. The same line is printed when the loaded versions contain no drafts. Invalid run directories are skipped and named on stderr. Loaded runs are counted before filters (`with_drafts` / `without_drafts`); `listed`, recommended versus not, `by_brief`, `by_channel`, and `by_variant` count only the rows that remain. It does not call a model, recompute the rubric, re-run risk rules, or write files. The overall value is the stored offline content score, not a conversion rate.
 
 ## Briefs
 
@@ -161,7 +165,7 @@ python3 -m pip install -e ".[dev]"
 pytest -q
 ```
 
-GitHub Actions runs pytest on Python 3.11 and 3.12, then `mcw run --mock`, `mcw score --fixtures`, `mcw list-versions`, `mcw compare`, `mcw list-briefs`, `mcw list-runs`, `mcw stats`, `mcw failures`, and `mcw list-findings`. See [CONTRIBUTING.md](CONTRIBUTING.md).
+GitHub Actions runs pytest on Python 3.11 and 3.12, then `mcw run --mock`, `mcw score --fixtures`, `mcw list-versions`, `mcw compare`, `mcw list-briefs`, `mcw list-runs`, `mcw stats`, `mcw failures`, `mcw list-findings`, and `mcw list-drafts`. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

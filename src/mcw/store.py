@@ -262,6 +262,81 @@ def inventory_findings(
     }
 
 
+def inventory_drafts(
+    out: Path,
+    run_id: str | None = None,
+    version: str | None = None,
+    *,
+    draft: str | None = None,
+    variant: str | None = None,
+    channel: str | None = None,
+    brief: str | None = None,
+) -> dict[str, Any]:
+    """Inventory stored drafts for the selected versions.
+
+    Reads manifest.json and versions.json first, using the same latest-version
+    rule as list_saved_runs. Then reads that version's drafts.json and walks
+    every draft, in file order, not only best_draft_id. scores.json and
+    checklist.json are joined when they can be read. A missing or unreadable
+    score or checklist file keeps the draft row and leaves those fields null.
+    If drafts.json is missing or has no list, the drafts list in scores.json
+    is used, then variant_scores on the version index. A list is used even
+    when it is empty or contains only non-dict entries; those entries are
+    skipped. Filters are exact and combined. ``channel`` matches a canonical
+    id, the Chinese label, or CHANNEL_ALIASES. An index without a channel is
+    ``unknown`` and only matches that text. Loaded-run counts are taken before
+    filters. ``n_listed``, recommended counts, and the breakdowns count only
+    the remaining rows. This does not call a model, recompute the rubric,
+    re-run risk rules, or write files. The numbers are stored offline content
+    scores, not conversion rates.
+    """
+    if version is not None and run_id is None:
+        raise MCWError("--version 需要同时提供 run id")
+    if run_id is not None:
+        selected = [_draft_source(out, run_id, version)]
+        skipped: list[str] = []
+    else:
+        inventory = list_saved_runs(out)
+        selected = [_draft_source_from_row(out, row) for row in inventory["runs"]]
+        skipped = list(inventory["skipped"])
+    loaded: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
+    for source in selected:
+        loaded.append((source, _stored_drafts(out, source)))
+    listed: list[dict[str, Any]] = []
+    for source, drafts in loaded:
+        if not _finding_source_matches(source, channel=channel, brief=brief):
+            continue
+        for row in drafts:
+            if _draft_row_matches(row, draft=draft, variant=variant):
+                listed.append(row)
+    n_with = sum(1 for _source, drafts in loaded if drafts)
+    n_recommended = sum(1 for row in listed if row["recommended"])
+    return {
+        "kind": "stored_drafts",
+        "n": len(loaded),
+        "n_with_drafts": n_with,
+        "n_without_drafts": len(loaded) - n_with,
+        "n_listed": len(listed),
+        "n_recommended": n_recommended,
+        "n_not_recommended": len(listed) - n_recommended,
+        "by_brief": _ranked_named_counts([_bucket_name(row.get("brief_id")) for row in listed], "brief_id"),
+        "by_channel": _ranked_named_counts([_bucket_name(row.get("channel")) for row in listed], "channel"),
+        "by_variant": _ranked_named_counts([_bucket_name(row.get("variant")) for row in listed], "variant"),
+        "filters": {
+            "run": run_id,
+            "version": version,
+            "draft": draft,
+            "variant": variant,
+            "channel": channel,
+            "brief": brief,
+        },
+        "skipped": skipped,
+        "drafts": listed,
+        "note": OFFLINE_SCORE_NOTE,
+        "not_business_conversion": True,
+    }
+
+
 def _finding_source_from_row(row: dict[str, Any]) -> dict[str, str]:
     return {
         "run_id": str(row["run_id"]),
@@ -381,6 +456,178 @@ def _finding_row_matches(
     if draft is not None and row.get("draft_id") != draft:
         return False
     return True
+
+
+def _draft_source(out: Path, run_id: str, version: str | None) -> dict[str, Any]:
+    return _with_draft_index(out, _named_finding_source(out, run_id, version))
+
+
+def _draft_source_from_row(out: Path, row: dict[str, Any]) -> dict[str, Any]:
+    return _with_draft_index(out, _finding_source_from_row(row))
+
+
+def _with_draft_index(out: Path, source: dict[str, str]) -> dict[str, Any]:
+    history = load_history(out, source["run_id"])
+    record = _record_for_version(history.get("versions"), source["version"])
+    enriched: dict[str, Any] = dict(source)
+    if record is None:
+        enriched["best_draft_id"] = None
+        enriched["variant_scores"] = []
+        return enriched
+    enriched["best_draft_id"] = _best_draft_id(record.get("best_draft_id"))
+    stored = record.get("variant_scores")
+    enriched["variant_scores"] = stored if isinstance(stored, list) else []
+    return enriched
+
+
+def _best_draft_id(value: object) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value
+    return None
+
+
+def _stored_drafts(out: Path, source: dict[str, Any]) -> list[dict[str, Any]]:
+    directory = version_dir(out, source["run_id"], source["version"])
+    drafts_doc = _read_optional_json(directory / "drafts.json")
+    scores_doc = _read_optional_json(directory / "scores.json")
+    checklist_doc = _read_optional_json(directory / "checklist.json")
+    entries, origin = _draft_entries(drafts_doc, scores_doc, source)
+    scores_index = _index_score_entries(scores_doc)
+    checklist_index = _index_checklist_entries(checklist_doc)
+    rows: list[dict[str, Any]] = []
+    for entry in entries:
+        if isinstance(entry, dict):
+            rows.append(_draft_row(source, entry, origin, scores_index, checklist_index))
+    return rows
+
+
+def _draft_entries(
+    drafts_doc: dict[str, Any] | None,
+    scores_doc: dict[str, Any] | None,
+    source: dict[str, Any],
+) -> tuple[list[Any], str]:
+    """Pick the draft list: drafts.json, then scores.json, then the index.
+
+    A list is usable even when it is empty. A missing file, an unreadable
+    file, a missing key, or a non-list is not, and the next source is used.
+    """
+    drafts = _optional_list(drafts_doc, "drafts")
+    if drafts is not None:
+        return drafts, "drafts"
+    scores = _optional_list(scores_doc, "drafts")
+    if scores is not None:
+        return scores, "scores"
+    stored = source.get("variant_scores")
+    if isinstance(stored, list):
+        return stored, "index"
+    return [], "index"
+
+
+def _optional_list(document: dict[str, Any] | None, key: str) -> list[Any] | None:
+    if not isinstance(document, dict):
+        return None
+    value = document.get(key)
+    if isinstance(value, list):
+        return value
+    return None
+
+
+def _index_score_entries(scores: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    return _index_by_id(_optional_list(scores, "drafts"), "draft_id")
+
+
+def _index_checklist_entries(checklist: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    return _index_by_id(_optional_list(checklist, "items"), "draft_id")
+
+
+def _index_by_id(entries: list[Any] | None, field: str) -> dict[str, dict[str, Any]]:
+    indexed: dict[str, dict[str, Any]] = {}
+    if not isinstance(entries, list):
+        return indexed
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        identity = entry.get(field)
+        if isinstance(identity, str) and identity not in indexed:
+            indexed[identity] = entry
+    return indexed
+
+
+def _draft_row(
+    source: dict[str, Any],
+    entry: dict[str, Any],
+    origin: str,
+    scores_index: dict[str, dict[str, Any]],
+    checklist_index: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    if origin == "drafts":
+        draft_id = _finding_text(entry.get("id"))
+        char_count = _stored_number(entry.get("char_count"))
+        overall = _joined_overall(scores_index.get(draft_id) if draft_id is not None else None)
+    elif origin == "scores":
+        draft_id = _finding_text(entry.get("draft_id"))
+        char_count = None
+        overall = _joined_overall(entry)
+    else:
+        draft_id = _finding_text(entry.get("draft_id"))
+        char_count = None
+        overall = _stored_number(entry.get("overall"))
+    checklist_item = checklist_index.get(draft_id) if draft_id is not None else None
+    if checklist_item is None:
+        checklist_passed = None
+        high_finding_count = None
+    else:
+        passed = checklist_item.get("passed")
+        checklist_passed = passed if isinstance(passed, bool) else None
+        high_finding_count = _high_finding_count(checklist_item)
+    best_id = source.get("best_draft_id")
+    return {
+        "run_id": source["run_id"],
+        "brief_id": source["brief_id"],
+        "version": source["version"],
+        "draft_id": draft_id,
+        "variant": _finding_text(entry.get("variant")),
+        "angle": _finding_text(entry.get("angle")),
+        "char_count": char_count,
+        "overall": overall,
+        "recommended": isinstance(best_id, str) and draft_id == best_id,
+        "checklist_passed": checklist_passed,
+        "high_finding_count": high_finding_count,
+        "channel": source["channel"],
+        "channel_label": source["channel_label"],
+    }
+
+
+def _joined_overall(entry: dict[str, Any] | None) -> int | float | None:
+    if not isinstance(entry, dict):
+        return None
+    score = entry.get("score")
+    if not isinstance(score, dict):
+        return None
+    return _stored_number(score.get("overall"))
+
+
+def _high_finding_count(item: dict[str, Any]) -> int:
+    findings = item.get("findings")
+    if not isinstance(findings, list):
+        return 0
+    return sum(1 for finding in findings if isinstance(finding, dict) and finding.get("severity") == "high")
+
+
+def _draft_row_matches(row: dict[str, Any], *, draft: str | None, variant: str | None) -> bool:
+    if draft is not None and row.get("draft_id") != draft:
+        return False
+    if variant is not None and row.get("variant") != variant:
+        return False
+    return True
+
+
+def _stored_number(value: object) -> int | float | None:
+    if not _is_number(value):
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value
 
 
 def _bucket_name(value: object) -> str:

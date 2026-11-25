@@ -1,4 +1,4 @@
-"""Command line: mcw run | score | compare | list-versions | list-runs | list-briefs | stats | failures | list-findings.
+"""Command line: mcw run | score | compare | list-versions | list-runs | list-briefs | stats | failures | list-findings | list-drafts.
 
 ``mcw list-briefs`` inventories Brief files in a directory (default ``briefs/``).
 It validates each file with the existing schema loader. It does not call a
@@ -18,6 +18,10 @@ failure or high-severity finding. It reads saved artifacts only.
 ``mcw list-findings`` inventories stored checklist findings for every draft in
 the selected version, at every severity. It reads saved artifacts only and
 does not recompute risk rules. The rows are not a conversion rate.
+
+``mcw list-drafts`` catalogs every stored draft in the selected version,
+including drafts that were not recommended. It reads saved artifacts only.
+The numbers are stored offline content scores, not conversion rates.
 """
 
 from __future__ import annotations
@@ -41,6 +45,7 @@ from mcw.scoring.compare import render_comparison
 from mcw.scoring.rubric import DIMENSIONS, OFFLINE_SCORE_NOTE, score_text
 from mcw.stages.extract import extract
 from mcw.store import (
+    inventory_drafts,
     inventory_failures,
     inventory_findings,
     list_saved_runs,
@@ -152,6 +157,21 @@ def build_parser() -> argparse.ArgumentParser:
     list_findings.add_argument("--out", default=".mcw")
     list_findings.add_argument("--json", action="store_true", dest="as_json")
     list_findings.set_defaults(handler=cmd_list_findings)
+
+    drafts_help = (
+        "列出已保存的全部文案变体、离线总分和清单状态，含未推荐稿。"
+        "只读存档，不调用模型，也不重算量表。"
+    )
+    list_drafts = sub.add_parser("list-drafts", help=drafts_help, description=drafts_help)
+    list_drafts.add_argument("run", nargs="?", default=None, help="只看这一次运行；默认扫描全部")
+    list_drafts.add_argument("--version", default=None, help="配合 run id，默认该运行的最新版")
+    list_drafts.add_argument("--draft", default=None, help="按 draft id 精确过滤")
+    list_drafts.add_argument("--variant", default=None, help="按变体精确过滤")
+    list_drafts.add_argument("--channel", default=None, help="按渠道 id、中文名或别名过滤")
+    list_drafts.add_argument("--brief", dest="brief_id", default=None, help="按 Brief.id 精确过滤")
+    list_drafts.add_argument("--out", default=".mcw")
+    list_drafts.add_argument("--json", action="store_true", dest="as_json")
+    list_drafts.set_defaults(handler=cmd_list_drafts)
     return parser
 
 
@@ -428,6 +448,68 @@ def cmd_list_findings(args: argparse.Namespace) -> int:
     print("by_severity: " + _format_breakdown(payload["by_severity"], "severity"))
     print(f"note: {payload['note']}")
     return 0
+
+
+def cmd_list_drafts(args: argparse.Namespace) -> int:
+    payload = inventory_drafts(
+        Path(args.out),
+        run_id=args.run,
+        version=args.version,
+        draft=args.draft,
+        variant=args.variant,
+        channel=args.channel,
+        brief=args.brief_id,
+    )
+    if args.as_json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
+    for name in payload["skipped"]:
+        print(f"跳过无效运行目录: {name}", file=sys.stderr)
+    if not payload["drafts"]:
+        print("没有文案")
+    else:
+        for item in payload["drafts"]:
+            print(_format_draft_row(item))
+    print(f"runs: {payload['n']}")
+    print(f"with_drafts: {payload['n_with_drafts']}")
+    print(f"without_drafts: {payload['n_without_drafts']}")
+    print(f"listed: {payload['n_listed']}")
+    print(f"recommended: {payload['n_recommended']}")
+    print(f"not_recommended: {payload['n_not_recommended']}")
+    print("by_brief: " + _format_breakdown(payload["by_brief"], "brief_id"))
+    print("by_channel: " + _format_breakdown(payload["by_channel"], "channel"))
+    print("by_variant: " + _format_breakdown(payload["by_variant"], "variant"))
+    print(f"note: {payload['note']}")
+    return 0
+
+
+def _format_draft_row(item: dict) -> str:
+    marker = "recommended" if item.get("recommended") else "—"
+    return (
+        f"{_cell(item.get('run_id'))} | {_cell(item.get('brief_id'))} | "
+        f"{_cell(item.get('version'))} | {_cell(item.get('draft_id'))} | "
+        f"{_cell(item.get('variant'))} | {_cell(item.get('angle'))} | "
+        f"chars {_number_cell(item.get('char_count'))} | "
+        f"overall {_number_cell(item.get('overall'))} | "
+        f"{marker} | checklist {_checklist_cell(item.get('checklist_passed'))} | "
+        f"high {_number_cell(item.get('high_finding_count'))}"
+    )
+
+
+def _number_cell(value: object) -> str:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return "—"
+    if isinstance(value, float) and (value != value or value in (float("inf"), float("-inf"))):
+        return "—"
+    return str(value)
+
+
+def _checklist_cell(value: object) -> str:
+    if value is True:
+        return "passed"
+    if value is False:
+        return "failed"
+    return "—"
 
 
 def _cell(value: object) -> str:
