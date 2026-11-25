@@ -9,6 +9,7 @@ from mcw.errors import MCWError
 from mcw.scoring.rubric import DIMENSIONS, OFFLINE_SCORE_NOTE
 from mcw.store import (
     FINDINGS_INVENTORY_NOTE,
+    inventory_drafts,
     inventory_failures,
     inventory_findings,
     list_saved_runs,
@@ -1149,3 +1150,665 @@ def test_inventory_findings_named_run_errors(tmp_path: Path) -> None:
     assert payload["n_with_findings"] == 0
     assert payload["findings"] == []
     assert payload["skipped"] == []
+
+
+def test_inventory_drafts_empty(tmp_path: Path) -> None:
+    payload = inventory_drafts(tmp_path / "missing")
+    assert payload["drafts"] == []
+    assert payload["skipped"] == []
+    assert payload["n"] == 0
+    assert payload["n_with_drafts"] == 0
+    assert payload["n_without_drafts"] == 0
+    assert payload["n_listed"] == 0
+    assert payload["n_recommended"] == 0
+    assert payload["n_not_recommended"] == 0
+    assert payload["by_brief"] == []
+    assert payload["by_channel"] == []
+    assert payload["by_variant"] == []
+    assert payload["filters"] == {
+        "run": None,
+        "version": None,
+        "draft": None,
+        "variant": None,
+        "channel": None,
+        "brief": None,
+    }
+    assert payload["kind"] == "stored_drafts"
+    assert payload["note"] == OFFLINE_SCORE_NOTE
+    assert "转化率" in payload["note"]
+    assert payload["not_business_conversion"] is True
+
+
+def test_inventory_drafts_lists_every_draft_and_keeps_counts_under_filters(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("list-drafts must not score or call a model")
+
+    monkeypatch.setattr("mcw.scoring.rubric.score_text", fail)
+    monkeypatch.setattr("mcw.store.score_text_card", fail)
+    monkeypatch.setattr("mcw.risk.rules.run_rules", fail)
+    monkeypatch.setattr("mcw.textutil.char_count", fail)
+    monkeypatch.setattr("urllib.request.urlopen", fail)
+
+    out = tmp_path / "out"
+    _save(
+        out,
+        "zzz",
+        "coffee-wechat",
+        [
+            _version(
+                "v1",
+                overall_score=11,
+                best_draft_id="old-a",
+                created_at="2024-01-01T00:00:00+00:00",
+                channel="wechat",
+                channel_label="微信公众号",
+            ),
+            _version(
+                "v2",
+                overall_score=100,
+                best_draft_id="z-a",
+                created_at="2024-01-02T00:00:00+00:00",
+                channel="wechat",
+                channel_label="微信公众号",
+                variant_scores=[{"draft_id": "index-only", "variant": "Z", "overall": 1}],
+            ),
+        ],
+        channel="wechat",
+        channel_label="微信公众号",
+    )
+    _version_artifact(
+        out,
+        "zzz",
+        "v1",
+        "drafts.json",
+        {"drafts": [_stored_draft("old-a", "A", "旧版", 10)]},
+    )
+    _version_artifact(
+        out,
+        "zzz",
+        "v2",
+        "drafts.json",
+        {
+            "drafts": [
+                "skip",
+                None,
+                _stored_draft("z-b", "B", "痛点", 80),
+                _stored_draft("z-a", "A", "清单", 90),
+                _stored_draft("z-c", "C", "", 70),
+                4,
+            ]
+        },
+    )
+    _version_artifact(
+        out,
+        "zzz",
+        "v2",
+        "scores.json",
+        {
+            "drafts": [
+                _stored_score("z-b", "B", "痛点", 70),
+                _stored_score("z-b", "B", "痛点", 1),
+                _stored_score("z-a", "A", "清单", 100),
+                _stored_score("score-only", "Z", "多余", 5),
+                "skip",
+            ]
+        },
+    )
+    _version_artifact(
+        out,
+        "zzz",
+        "v2",
+        "checklist.json",
+        _checklist(
+            [
+                _checklist_item(
+                    "z-b",
+                    False,
+                    [_finding("absolute_claim", "high", "绝对化用语", "全网第一"), "skip", _finding("tone", "medium", "语气", "必须")],
+                ),
+                _checklist_item("z-b", True, []),
+                _checklist_item("z-a", True, []),
+                "not-an-item",
+            ]
+        ),
+    )
+    _write(
+        out / "runs" / "zzz" / "drafts.json",
+        {"drafts": [_stored_draft("root-only", "A", "根目录", 1)]},
+    )
+    _save(
+        out,
+        "quiet",
+        "kidsnack-ecommerce",
+        [_version("v1", overall_score=100, best_draft_id="q-a", created_at="2024-03-01T00:00:00+00:00")],
+    )
+    _save(
+        out,
+        "aaa",
+        "sunscreen-xhs",
+        [
+            _version(
+                "v1",
+                overall_score=100,
+                best_draft_id="a-a",
+                created_at="2024-05-01T00:00:00+00:00",
+                channel="xiaohongshu",
+                channel_label="小红书",
+            )
+        ],
+        channel="xiaohongshu",
+        channel_label="小红书",
+    )
+    _version_artifact(
+        out,
+        "aaa",
+        "v1",
+        "drafts.json",
+        {"drafts": [_stored_draft("a-b", "B", "场景", 40), _stored_draft("a-a", "A", "痛点", 50)]},
+    )
+    _version_artifact(
+        out,
+        "aaa",
+        "v1",
+        "scores.json",
+        {"drafts": [_stored_score("a-b", "B", "场景", 88), _stored_score("a-a", "A", "痛点", 100)]},
+    )
+    _version_artifact(
+        out,
+        "aaa",
+        "v1",
+        "checklist.json",
+        _checklist(
+            [
+                _checklist_item("a-b", False, [_finding("tone", "medium", "语气", "家人们")]),
+                _checklist_item("a-a", True, []),
+            ]
+        ),
+    )
+    (out / "runs" / "empty-junk").mkdir(parents=True)
+
+    before = _tree(out)
+    payload = inventory_drafts(out)
+    assert _tree(out) == before
+    assert payload["skipped"] == list_saved_runs(out)["skipped"]
+    assert payload["n"] == 3
+    assert payload["n_with_drafts"] == 2
+    assert payload["n_without_drafts"] == 1
+    assert payload["n_listed"] == 5
+    assert payload["n_recommended"] == 2
+    assert payload["n_not_recommended"] == 3
+    assert [row["draft_id"] for row in payload["drafts"]] == ["z-b", "z-a", "z-c", "a-b", "a-a"]
+    assert [row["run_id"] for row in payload["drafts"]] == ["zzz", "zzz", "zzz", "aaa", "aaa"]
+    assert payload["drafts"][0]["version"] == "v2"
+    assert payload["drafts"][0]["recommended"] is False
+    assert payload["drafts"][0]["overall"] == 70
+    assert payload["drafts"][0]["char_count"] == 80
+    assert payload["drafts"][0]["angle"] == "痛点"
+    assert payload["drafts"][0]["checklist_passed"] is False
+    assert payload["drafts"][0]["high_finding_count"] == 1
+    assert payload["drafts"][0]["channel"] == "wechat"
+    assert payload["drafts"][1]["recommended"] is True
+    assert payload["drafts"][1]["draft_id"] == "z-a"
+    assert payload["drafts"][1]["overall"] == 100
+    assert payload["drafts"][1]["checklist_passed"] is True
+    assert payload["drafts"][1]["high_finding_count"] == 0
+    assert payload["drafts"][2]["angle"] == ""
+    assert payload["drafts"][2]["overall"] is None
+    assert payload["drafts"][2]["checklist_passed"] is None
+    assert payload["drafts"][2]["high_finding_count"] is None
+    assert payload["drafts"][2]["recommended"] is False
+    assert payload["drafts"][3]["high_finding_count"] == 0
+    assert payload["drafts"][3]["checklist_passed"] is False
+    assert payload["drafts"][4]["recommended"] is True
+    assert "old-only" not in json.dumps(payload["drafts"], ensure_ascii=False)
+    assert "root-only" not in json.dumps(payload["drafts"], ensure_ascii=False)
+    assert "index-only" not in json.dumps(payload["drafts"], ensure_ascii=False)
+    assert "score-only" not in json.dumps(payload["drafts"], ensure_ascii=False)
+    assert payload["by_brief"] == [
+        {"brief_id": "coffee-wechat", "count": 3},
+        {"brief_id": "sunscreen-xhs", "count": 2},
+    ]
+    assert payload["by_channel"] == [
+        {"channel": "wechat", "count": 3},
+        {"channel": "xiaohongshu", "count": 2},
+    ]
+    assert payload["by_variant"] == [
+        {"variant": "A", "count": 2},
+        {"variant": "B", "count": 2},
+        {"variant": "C", "count": 1},
+    ]
+    assert payload["note"] == OFFLINE_SCORE_NOTE
+    assert payload["not_business_conversion"] is True
+
+    filtered = inventory_drafts(out, draft="a-b", variant="B", channel="xhs", brief="sunscreen-xhs")
+    assert [row["draft_id"] for row in filtered["drafts"]] == ["a-b"]
+    assert filtered["n"] == payload["n"]
+    assert filtered["n_with_drafts"] == payload["n_with_drafts"]
+    assert filtered["n_without_drafts"] == payload["n_without_drafts"]
+    assert filtered["n_listed"] == 1
+    assert filtered["n_recommended"] == 0
+    assert filtered["n_not_recommended"] == 1
+    assert filtered["filters"]["draft"] == "a-b"
+    assert filtered["filters"]["variant"] == "B"
+    assert filtered["filters"]["channel"] == "xhs"
+    assert filtered["filters"]["brief"] == "sunscreen-xhs"
+
+    missed = inventory_drafts(out, draft="a-b", variant="A")
+    assert missed["drafts"] == []
+    assert missed["n_listed"] == 0
+    assert missed["n_with_drafts"] == 2
+    assert missed["n_without_drafts"] == 1
+    assert missed["by_variant"] == []
+
+    for channel in ("xhs", "小红书", "xiaohongshu", " XHS "):
+        matched = inventory_drafts(out, channel=channel)
+        assert [row["draft_id"] for row in matched["drafts"]] == ["a-b", "a-a"]
+        assert matched["n_with_drafts"] == 2
+    unknown = inventory_drafts(out, channel="unknown")
+    assert unknown["drafts"] == []
+    assert unknown["n"] == 3
+    assert unknown["n_with_drafts"] == 2
+
+    older = inventory_drafts(out, run_id="zzz", version="v1")
+    assert older["n"] == 1
+    assert older["skipped"] == []
+    assert [row["draft_id"] for row in older["drafts"]] == ["old-a"]
+    assert older["drafts"][0]["version"] == "v1"
+    assert older["drafts"][0]["overall"] is None
+    assert older["drafts"][0]["recommended"] is True
+    assert older["filters"]["version"] == "v1"
+    latest = inventory_drafts(out, run_id="zzz")
+    assert [row["draft_id"] for row in latest["drafts"]] == ["z-b", "z-a", "z-c"]
+    assert "old-a" not in json.dumps(latest["drafts"], ensure_ascii=False)
+
+
+def test_inventory_drafts_falls_back_when_drafts_json_is_unusable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("list-drafts must not score or call a model")
+
+    monkeypatch.setattr("mcw.scoring.rubric.score_text", fail)
+    monkeypatch.setattr("mcw.store.score_text_card", fail)
+    monkeypatch.setattr("mcw.textutil.char_count", fail)
+
+    out = tmp_path / "out"
+    _save(
+        out,
+        "from-scores",
+        "sunscreen-xhs",
+        [
+            _version(
+                "v1",
+                best_draft_id="f-a",
+                created_at="2024-01-05T00:00:00+00:00",
+                channel="xiaohongshu",
+                channel_label="小红书",
+                variant_scores=[{"draft_id": "index-only", "variant": "Z", "overall": 1}],
+            )
+        ],
+        channel="xiaohongshu",
+        channel_label="小红书",
+    )
+    score_b = _stored_score("f-b", "B", "痛点", 33)
+    score_b["char_count"] = 5
+    _version_artifact(
+        out,
+        "from-scores",
+        "v1",
+        "scores.json",
+        {"drafts": ["skip", score_b, _stored_score("f-a", "A", "清单", 90)]},
+    )
+    _version_artifact(
+        out,
+        "from-scores",
+        "v1",
+        "checklist.json",
+        _checklist(
+            [
+                _checklist_item("f-b", False, [_finding("absolute_claim", "high", "绝对化用语", "全网第一")]),
+                _checklist_item("f-a", True, []),
+            ]
+        ),
+    )
+    _save(
+        out,
+        "from-index",
+        "coffee-wechat",
+        [
+            _version(
+                "v1",
+                best_draft_id="i-a",
+                created_at="2024-01-04T00:00:00+00:00",
+                variant_scores=[
+                    "skip",
+                    {"draft_id": "i-b", "variant": "B", "overall": 15},
+                    {"draft_id": "i-a", "variant": "A", "overall": 80},
+                ],
+            )
+        ],
+    )
+    (out / "runs" / "from-index" / "versions" / "v1").mkdir(parents=True)
+    (out / "runs" / "from-index" / "versions" / "v1" / "scores.json").write_text("{", encoding="utf-8")
+    _version_artifact(
+        out,
+        "from-index",
+        "v1",
+        "checklist.json",
+        _checklist(
+            [
+                _checklist_item("i-b", False, [_finding("tone", "high", "语气", "必须")]),
+                _checklist_item("i-a", True, []),
+            ]
+        ),
+    )
+    _save(
+        out,
+        "bad-shape",
+        "creditcard-official",
+        [
+            _version(
+                "v1",
+                best_draft_id="b-a",
+                created_at="2024-01-02T00:00:00+00:00",
+                channel="official_site",
+                channel_label="官网",
+            )
+        ],
+        channel="official_site",
+        channel_label="官网",
+    )
+    _version_artifact(out, "bad-shape", "v1", "drafts.json", {"version": "v1"})
+    _version_artifact(
+        out,
+        "bad-shape",
+        "v1",
+        "scores.json",
+        {"drafts": [_stored_score("b-a", "A", "费率", 60)]},
+    )
+    _save(
+        out,
+        "empty-list",
+        "fitness-douyin",
+        [
+            _version(
+                "v1",
+                best_draft_id="decoy",
+                created_at="2024-01-03T00:00:00+00:00",
+                channel="douyin",
+                channel_label="抖音",
+                variant_scores=[{"draft_id": "decoy", "variant": "Z", "overall": 1}],
+            )
+        ],
+        channel="douyin",
+        channel_label="抖音",
+    )
+    _version_artifact(out, "empty-list", "v1", "drafts.json", {"drafts": []})
+    _save(
+        out,
+        "non-dicts",
+        "kidsnack-ecommerce",
+        [
+            _version(
+                "v1",
+                best_draft_id="n-a",
+                created_at="2024-01-06T00:00:00+00:00",
+                channel="ecommerce",
+                channel_label="电商详情",
+            )
+        ],
+        channel="ecommerce",
+        channel_label="电商详情",
+    )
+    _version_artifact(out, "non-dicts", "v1", "drafts.json", {"drafts": ["skip", 1, None]})
+    _version_artifact(
+        out,
+        "non-dicts",
+        "v1",
+        "scores.json",
+        {"drafts": [_stored_score("n-a", "A", "配料", 50)]},
+    )
+    _save(
+        out,
+        "priority",
+        "sunscreen-xhs",
+        [
+            _version(
+                "v1",
+                best_draft_id="p-a",
+                created_at="2024-01-07T00:00:00+00:00",
+                channel="xiaohongshu",
+                channel_label="小红书",
+                variant_scores=[{"draft_id": "v-extra", "variant": "Z", "overall": 2}],
+            )
+        ],
+        channel="xiaohongshu",
+        channel_label="小红书",
+    )
+    _version_artifact(out, "priority", "v1", "drafts.json", {"drafts": [_stored_draft("p-a", "A", "场景", 21)]})
+    _version_artifact(
+        out,
+        "priority",
+        "v1",
+        "scores.json",
+        {"drafts": [_stored_score("p-a", "A", "场景", 77), _stored_score("e-a", "B", "多余", 10)]},
+    )
+    _save(
+        out,
+        "unreadable",
+        "coffee-wechat",
+        [
+            _version(
+                "v1",
+                best_draft_id="u-a",
+                created_at="2024-01-08T00:00:00+00:00",
+                channel="wechat",
+                channel_label="微信公众号",
+            )
+        ],
+        channel="wechat",
+        channel_label="微信公众号",
+    )
+    broken = _stored_draft("u-b", "D", "坏", 0)
+    broken["char_count"] = True
+    _version_artifact(
+        out,
+        "unreadable",
+        "v1",
+        "drafts.json",
+        {"drafts": ["skip", _stored_draft("u-a", "C", "声明", 8), broken]},
+    )
+    version_dir = out / "runs" / "unreadable" / "versions" / "v1"
+    (version_dir / "scores.json").write_text("{", encoding="utf-8")
+    (version_dir / "checklist.json").write_text("{", encoding="utf-8")
+    _save(
+        out,
+        "bad-json",
+        "fitness-douyin",
+        [
+            _version(
+                "v1",
+                best_draft_id="s-a",
+                created_at="2024-01-01T00:00:00+00:00",
+                channel="douyin",
+                channel_label="抖音",
+            )
+        ],
+        channel="douyin",
+        channel_label="抖音",
+    )
+    bad_dir = out / "runs" / "bad-json" / "versions" / "v1"
+    bad_dir.mkdir(parents=True)
+    (bad_dir / "drafts.json").write_text("{", encoding="utf-8")
+    kept = _stored_score("s-a", "A", "备用", 40)
+    kept["char_count"] = 99
+    _version_artifact(out, "bad-json", "v1", "scores.json", {"drafts": [kept]})
+    _version_artifact(
+        out,
+        "bad-json",
+        "v1",
+        "checklist.json",
+        _checklist([_checklist_item("s-a", True, [])]),
+    )
+
+    payload = inventory_drafts(out)
+    assert payload["n"] == 8
+    assert payload["n_with_drafts"] == 6
+    assert payload["n_without_drafts"] == 2
+    assert [row["draft_id"] for row in payload["drafts"]] == [
+        "s-a",
+        "b-a",
+        "i-b",
+        "i-a",
+        "f-b",
+        "f-a",
+        "p-a",
+        "u-a",
+        "u-b",
+    ]
+    by_id = {row["draft_id"]: row for row in payload["drafts"]}
+    assert by_id["s-a"]["char_count"] is None
+    assert by_id["s-a"]["overall"] == 40
+    assert by_id["s-a"]["angle"] == "备用"
+    assert by_id["s-a"]["recommended"] is True
+    assert by_id["s-a"]["checklist_passed"] is True
+    assert by_id["s-a"]["high_finding_count"] == 0
+    assert by_id["b-a"]["overall"] == 60
+    assert by_id["b-a"]["checklist_passed"] is None
+    assert by_id["b-a"]["char_count"] is None
+    assert by_id["i-b"]["angle"] is None
+    assert by_id["i-b"]["char_count"] is None
+    assert by_id["i-b"]["overall"] == 15
+    assert by_id["i-b"]["recommended"] is False
+    assert by_id["i-b"]["checklist_passed"] is False
+    assert by_id["i-b"]["high_finding_count"] == 1
+    assert by_id["i-b"]["channel"] == "unknown"
+    assert by_id["i-a"]["recommended"] is True
+    assert by_id["i-a"]["overall"] == 80
+    assert by_id["f-b"]["char_count"] is None
+    assert by_id["f-b"]["angle"] == "痛点"
+    assert by_id["f-b"]["overall"] == 33
+    assert by_id["f-b"]["recommended"] is False
+    assert by_id["f-a"]["recommended"] is True
+    assert by_id["p-a"]["char_count"] == 21
+    assert by_id["p-a"]["overall"] == 77
+    assert by_id["p-a"]["checklist_passed"] is None
+    assert by_id["u-a"]["char_count"] == 8
+    assert by_id["u-a"]["overall"] is None
+    assert by_id["u-a"]["checklist_passed"] is None
+    assert by_id["u-a"]["high_finding_count"] is None
+    assert by_id["u-a"]["recommended"] is True
+    assert by_id["u-b"]["char_count"] is None
+    assert by_id["u-b"]["recommended"] is False
+    assert "index-only" not in by_id
+    assert "decoy" not in by_id
+    assert "n-a" not in by_id
+    assert "e-a" not in by_id
+    assert "v-extra" not in by_id
+    assert payload["n_recommended"] == 6
+    assert payload["n_not_recommended"] == 3
+
+
+def test_inventory_drafts_channel_fallback_and_version_tie(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    _save(
+        out,
+        "from-manifest",
+        "fitness-douyin",
+        [_version("v1", overall_score=100, best_draft_id="m-a", created_at="2024-01-01T00:00:00+00:00")],
+        channel="douyin",
+        channel_label="抖音",
+    )
+    _version_artifact(out, "from-manifest", "v1", "drafts.json", {"drafts": [_stored_draft("m-a", "A", "钩子", 12)]})
+    _save(
+        out,
+        "tie",
+        "sunscreen-xhs",
+        [
+            _version(
+                "v2",
+                overall_score=100,
+                best_draft_id="tie-a",
+                created_at="2024-02-01T00:00:00+00:00",
+                channel="wechat",
+                channel_label="微信公众号",
+            ),
+            _version(
+                "v2",
+                overall_score=100,
+                best_draft_id="tie-b",
+                created_at="2024-03-01T00:00:00+00:00",
+                channel="xiaohongshu",
+                channel_label="小红书",
+            ),
+        ],
+        channel="wechat",
+        channel_label="微信公众号",
+    )
+    _version_artifact(
+        out,
+        "tie",
+        "v2",
+        "drafts.json",
+        {"drafts": [_stored_draft("tie-a", "A", "先写", 10), _stored_draft("tie-b", "B", "后写", 11)]},
+    )
+    fallback = inventory_drafts(out, run_id="from-manifest")
+    assert fallback["drafts"][0]["channel"] == "douyin"
+    assert fallback["drafts"][0]["channel_label"] == "抖音"
+    assert inventory_drafts(out, channel="抖音")["n_listed"] == 1
+    assert inventory_drafts(out, channel="unknown", run_id="from-manifest")["drafts"] == []
+
+    tied = inventory_drafts(out, run_id="tie")
+    assert [row["draft_id"] for row in tied["drafts"]] == ["tie-a", "tie-b"]
+    assert tied["drafts"][0]["recommended"] is False
+    assert tied["drafts"][1]["recommended"] is True
+    assert tied["drafts"][0]["channel"] == "xiaohongshu"
+    assert tied["drafts"][0]["channel_label"] == "小红书"
+    scanned = inventory_drafts(out)
+    tie_rows = [row for row in scanned["drafts"] if row["run_id"] == "tie"]
+    assert tie_rows[0]["channel"] == "xiaohongshu"
+    assert tie_rows[1]["recommended"] is True
+
+
+def test_inventory_drafts_named_run_errors(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    _save(out, "sun", "sunscreen-xhs", [_version("v1", overall_score=100, approval_status="pending")])
+    with pytest.raises(MCWError, match="找不到运行"):
+        inventory_drafts(out, run_id="missing")
+    with pytest.raises(MCWError, match="版本索引里没有 v9"):
+        inventory_drafts(out, run_id="sun", version="v9")
+    with pytest.raises(MCWError, match="版本号不合法"):
+        inventory_drafts(out, run_id="sun", version="latest")
+    with pytest.raises(MCWError, match="--version 需要同时提供 run id"):
+        inventory_drafts(out, version="v1")
+    payload = inventory_drafts(out, run_id="sun")
+    assert payload["n"] == 1
+    assert payload["n_with_drafts"] == 0
+    assert payload["drafts"] == []
+    assert payload["skipped"] == []
+
+
+def _stored_draft(draft_id: str, variant: str, angle: str, char_count: object) -> dict:
+    return {
+        "id": draft_id,
+        "variant": variant,
+        "angle": angle,
+        "title": "",
+        "body": "",
+        "channel": "xiaohongshu",
+        "text": "stored",
+        "char_count": char_count,
+    }
+
+
+def _stored_score(draft_id: str, variant: str, angle: str, overall: object) -> dict:
+    return {
+        "draft_id": draft_id,
+        "variant": variant,
+        "angle": angle,
+        "score": {"overall": overall},
+    }
