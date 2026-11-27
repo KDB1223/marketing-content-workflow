@@ -1,4 +1,4 @@
-"""Command line: mcw run | score | compare | list-versions | list-runs | list-briefs | stats | failures | list-findings | list-drafts.
+"""Command line: mcw run | score | compare | list-versions | list-runs | list-briefs | stats | failures | list-findings | list-drafts | show.
 
 ``mcw list-briefs`` inventories Brief files in a directory (default ``briefs/``).
 It validates each file with the existing schema loader. It does not call a
@@ -22,6 +22,12 @@ does not recompute risk rules. The rows are not a conversion rate.
 ``mcw list-drafts`` catalogs every stored draft in the selected version,
 including drafts that were not recommended. It reads saved artifacts only.
 The numbers are stored offline content scores, not conversion rates.
+
+``mcw show`` prints the stored draft text for that same selection, with the
+stored dimension scores, checklist findings, and approval. It reads saved
+artifacts only. It does not call a model, recompute the rubric, or re-run
+risk rules. The numbers are stored offline content scores, not conversion
+rates.
 """
 
 from __future__ import annotations
@@ -49,6 +55,7 @@ from mcw.store import (
     inventory_failures,
     inventory_findings,
     list_saved_runs,
+    show_drafts,
     load_history,
     load_version_files,
     make_run_id,
@@ -172,6 +179,21 @@ def build_parser() -> argparse.ArgumentParser:
     list_drafts.add_argument("--out", default=".mcw")
     list_drafts.add_argument("--json", action="store_true", dest="as_json")
     list_drafts.set_defaults(handler=cmd_list_drafts)
+
+    show_help = (
+        "打印已保存文案的正文、离线维度分、清单发现和确认状态。"
+        "只读存档，不调用模型，也不重算量表。"
+    )
+    show = sub.add_parser("show", help=show_help, description=show_help)
+    show.add_argument("run", nargs="?", default=None, help="只看这一次运行；默认扫描全部")
+    show.add_argument("--version", default=None, help="配合 run id，默认该运行的最新版")
+    show.add_argument("--draft", default=None, help="按 draft id 精确过滤")
+    show.add_argument("--variant", default=None, help="按变体精确过滤")
+    show.add_argument("--channel", default=None, help="按渠道 id、中文名或别名过滤")
+    show.add_argument("--brief", dest="brief_id", default=None, help="按 Brief.id 精确过滤")
+    show.add_argument("--out", default=".mcw")
+    show.add_argument("--json", action="store_true", dest="as_json")
+    show.set_defaults(handler=cmd_show)
     return parser
 
 
@@ -483,6 +505,38 @@ def cmd_list_drafts(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_show(args: argparse.Namespace) -> int:
+    payload = show_drafts(
+        Path(args.out),
+        run_id=args.run,
+        version=args.version,
+        draft=args.draft,
+        variant=args.variant,
+        channel=args.channel,
+        brief=args.brief_id,
+    )
+    if args.as_json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
+    for name in payload["skipped"]:
+        print(f"跳过无效运行目录: {name}", file=sys.stderr)
+    if not payload["drafts"]:
+        print("没有文案")
+    else:
+        _print_shown_drafts(payload["drafts"])
+    print(f"runs: {payload['n']}")
+    print(f"with_drafts: {payload['n_with_drafts']}")
+    print(f"without_drafts: {payload['n_without_drafts']}")
+    print(f"listed: {payload['n_listed']}")
+    print(f"recommended: {payload['n_recommended']}")
+    print(f"not_recommended: {payload['n_not_recommended']}")
+    print("by_brief: " + _format_breakdown(payload["by_brief"], "brief_id"))
+    print("by_channel: " + _format_breakdown(payload["by_channel"], "channel"))
+    print("by_variant: " + _format_breakdown(payload["by_variant"], "variant"))
+    print(f"note: {payload['note']}")
+    return 0
+
+
 def _format_draft_row(item: dict) -> str:
     marker = "recommended" if item.get("recommended") else "—"
     return (
@@ -494,6 +548,76 @@ def _format_draft_row(item: dict) -> str:
         f"{marker} | checklist {_checklist_cell(item.get('checklist_passed'))} | "
         f"high {_number_cell(item.get('high_finding_count'))}"
     )
+
+
+def _print_shown_drafts(drafts: list[dict]) -> None:
+    groups: list[list[dict]] = []
+    for item in drafts:
+        key = (item.get("run_id"), item.get("version"))
+        if not groups or (groups[-1][0].get("run_id"), groups[-1][0].get("version")) != key:
+            groups.append([item])
+        else:
+            groups[-1].append(item)
+    for group in groups:
+        for index, item in enumerate(group):
+            print(_format_draft_row(item))
+            dimension_line = _format_dimension_line(item.get("dimensions"))
+            if dimension_line is not None:
+                print(dimension_line)
+            _print_stored_text(item.get("text"))
+            findings = item.get("findings")
+            if isinstance(findings, list):
+                for finding in findings:
+                    if isinstance(finding, dict):
+                        print(
+                            f"{_cell(finding.get('severity'))}: {_cell(finding.get('rule_id'))} | "
+                            f"{_cell(finding.get('message'))} | {_cell(finding.get('evidence'))}"
+                        )
+            current = _approval_identity(item)
+            nxt = _approval_identity(group[index + 1]) if index + 1 < len(group) else None
+            if current != nxt:
+                print(_format_approval(item))
+
+
+def _format_dimension_line(dimensions: object) -> str | None:
+    if not isinstance(dimensions, dict):
+        return None
+    parts = [f"{label} {_number_cell(dimensions.get(key))}" for key, label in DIMENSIONS]
+    return "dimensions: " + ", ".join(parts)
+
+
+def _print_stored_text(text: object) -> None:
+    if not isinstance(text, str):
+        print("text: —")
+        return
+    print("```text")
+    sys.stdout.write(text)
+    if not text.endswith("\n"):
+        sys.stdout.write("\n")
+    print("```")
+
+
+def _approval_identity(item: dict) -> tuple[object, object, object, object]:
+    return (
+        item.get("approval_status"),
+        item.get("reviewer"),
+        item.get("comment"),
+        item.get("approved_draft_id"),
+    )
+
+
+def _format_approval(item: dict) -> str:
+    parts = [f"approval: {_cell(item.get('approval_status'))}"]
+    reviewer = item.get("reviewer")
+    if isinstance(reviewer, str) and reviewer.strip():
+        parts.append(f"reviewer {reviewer}")
+    comment = item.get("comment")
+    if isinstance(comment, str) and comment.strip():
+        parts.append(comment)
+    draft_id = item.get("approved_draft_id")
+    if isinstance(draft_id, str) and draft_id.strip():
+        parts.append(f"draft {draft_id}")
+    return " | ".join(parts)
 
 
 def _number_cell(value: object) -> str:

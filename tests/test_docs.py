@@ -20,6 +20,7 @@ def test_docs_name_the_commands_and_the_offline_boundary() -> None:
         assert "mcw failures" in text
         assert "mcw list-findings" in text
         assert "mcw list-drafts" in text
+        assert "mcw show" in text
         assert "```mermaid" in text or "round_half_up" in text
         assert "离线内容分" in text
     assert "clean-xiaohongshu" in readme
