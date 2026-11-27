@@ -2140,6 +2140,578 @@ def test_list_drafts_help(capsys: pytest.CaptureFixture[str]) -> None:
     assert "list-drafts" in capsys.readouterr().out
 
 
+def test_show_empty(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    out = tmp_path / "empty"
+    code = main(["show", "--out", str(out)])
+    assert code == 0
+    captured = capsys.readouterr()
+    assert "没有文案" in captured.out
+    assert "runs: 0" in captured.out
+    assert "with_drafts: 0" in captured.out
+    assert "without_drafts: 0" in captured.out
+    assert "listed: 0" in captured.out
+    assert "recommended: 0" in captured.out
+    assert "not_recommended: 0" in captured.out
+    assert OFFLINE_SCORE_NOTE in captured.out
+    assert "```text" not in captured.out
+    assert captured.err == ""
+
+    code = main(["show", "--out", str(out), "--json"])
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["drafts"] == []
+    assert payload["skipped"] == []
+    assert payload["n"] == 0
+    assert payload["n_listed"] == 0
+    assert payload["kind"] == "stored_draft_text"
+    assert payload["note"] == OFFLINE_SCORE_NOTE
+    assert payload["not_business_conversion"] is True
+
+    junk_only = tmp_path / "junk-only"
+    (junk_only / "runs" / "nope").mkdir(parents=True)
+    code = main(["show", "--out", str(junk_only)])
+    assert code == 0
+    captured = capsys.readouterr()
+    assert "没有文案" in captured.out
+    assert "nope" not in captured.out
+    assert "跳过无效运行目录: nope" in captured.err
+
+
+def test_show_text_json_and_filters(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    out = tmp_path / "out"
+    _write_draft_run(
+        out,
+        "zzz",
+        "coffee-wechat",
+        "2024-01-01T00:00:00+00:00",
+        "wechat",
+        "微信公众号",
+        [
+            "skip",
+            None,
+            {"id": "z-b", "variant": "B", "angle": "痛点", "char_count": 80, "text": "痛点第一行\n痛点第二行"},
+            {"id": "z-a", "variant": "A", "angle": "清单", "char_count": 90, "text": "清单正文"},
+            {"id": "z-c", "variant": "C", "angle": "", "char_count": 70, "text": 12},
+        ],
+        "z-a",
+        scores=[
+            {
+                "draft_id": "z-b",
+                "variant": "B",
+                "angle": "痛点",
+                "score": {
+                    "overall": 70,
+                    "dimensions": {
+                        "selling_point_accuracy": {"label": "卖点准确", "score": 80},
+                        "channel_fit": {"label": "渠道适配", "score": 70},
+                        "compliance": {"label": "合规", "score": 60},
+                    },
+                },
+            },
+            {
+                "draft_id": "z-a",
+                "variant": "A",
+                "angle": "清单",
+                "score": {
+                    "overall": 100,
+                    "dimensions": {
+                        key: {"label": label, "score": 100} for key, label in DIMENSIONS
+                    },
+                },
+            },
+        ],
+        checklist_items=[
+            {
+                "draft_id": "z-b",
+                "passed": False,
+                "findings": [
+                    {
+                        "rule_id": "absolute_claim",
+                        "severity": "high",
+                        "message": "绝对化用语",
+                        "evidence": "全网第一",
+                    },
+                    "skip",
+                    {"rule_id": "tone", "severity": "medium", "message": "语气偏硬", "evidence": "必须"},
+                ],
+            },
+            {"draft_id": "z-a", "passed": True, "findings": []},
+        ],
+        record_extra={
+            "approval_status": "approved",
+            "reviewer": "提交人",
+            "comment": "版本备注",
+            "approval_reviewer": "林可",
+            "approval_comment": "保留声明",
+            "approved_draft_id": "z-a",
+        },
+        approval={"status": "rejected", "reviewer": "文件里的人", "comment": "文件里的话", "draft_id": "z-b"},
+    )
+    _write_draft_run(
+        out,
+        "aaa",
+        "sunscreen-xhs",
+        "2024-05-01T00:00:00+00:00",
+        "xiaohongshu",
+        "小红书",
+        [
+            {"id": "a-b", "variant": "B", "angle": "场景", "char_count": 40, "text": "场景正文"},
+            {"id": "a-a", "variant": "A", "angle": "痛点", "char_count": 50, "text": "痛点正文"},
+        ],
+        "a-a",
+        scores=[
+            {"draft_id": "a-b", "variant": "B", "angle": "场景", "score": {"overall": 88}},
+            {"draft_id": "a-a", "variant": "A", "angle": "痛点", "score": {"overall": 100}},
+        ],
+        checklist_items=[
+            {
+                "draft_id": "a-b",
+                "passed": False,
+                "findings": [{"severity": "medium", "rule_id": "tone", "message": "语气", "evidence": "家人们"}],
+            },
+            {"draft_id": "a-a", "passed": True, "findings": []},
+        ],
+        approval={"status": "approved", "reviewer": "文件审阅", "comment": "文件意见", "draft_id": "a-a"},
+    )
+    _write_draft_run(
+        out,
+        "bare",
+        "kidsnack-ecommerce",
+        "2024-06-01T00:00:00+00:00",
+        None,
+        None,
+        [{"id": "bare-a", "variant": "A", "angle": "配料", "char_count": 12, "text": "配料表第一位是燕麦"}],
+        "bare-a",
+        include_scores=False,
+        include_checklist=False,
+        record_extra={"approval_status": None},
+        approval={"status": "rejected", "reviewer": "周宁", "comment": "语气太满", "draft_id": "bare-a"},
+    )
+    (out / "runs" / "nope").mkdir(parents=True)
+    before = _snapshot(out)
+    code = main(["list-drafts", "--out", str(out)])
+    assert code == 0
+    assert _snapshot(out) == before
+    listing = capsys.readouterr().out
+    assert "```text" not in listing
+    assert "痛点第一行" not in listing
+    assert "配料表第一位是燕麦" not in listing
+
+    code = main(["show", "--out", str(out)])
+    assert code == 0
+    assert _snapshot(out) == before
+    captured = capsys.readouterr()
+    assert "跳过无效运行目录: nope" in captured.err
+    text = captured.out
+    lines = text.splitlines()
+    assert "没有文案" not in text
+    assert "文件里的人" not in text
+    assert "版本备注" not in text
+    assert text.index("zzz |") < text.index("aaa |") < text.index("bare |")
+    z_b = _header_index(lines, "z-b")
+    assert lines[z_b] == (
+        "zzz | coffee-wechat | v1 | z-b | B | 痛点 | chars 80 | overall 70 | — | checklist failed | high 1"
+    )
+    assert lines[z_b + 1] == "dimensions: 卖点准确 80, 渠道适配 70, 合规 60, 可读性 —"
+    assert lines[z_b + 2] == "```text"
+    assert lines[z_b + 3] == "痛点第一行"
+    assert lines[z_b + 4] == "痛点第二行"
+    assert lines[z_b + 5] == "```"
+    assert lines[z_b + 6] == "high: absolute_claim | 绝对化用语 | 全网第一"
+    assert lines[z_b + 7] == "medium: tone | 语气偏硬 | 必须"
+    z_a = _header_index(lines, "z-a")
+    assert "recommended" in lines[z_a]
+    assert lines[z_a + 1] == "dimensions: 卖点准确 100, 渠道适配 100, 合规 100, 可读性 100"
+    assert lines[z_a + 2 : z_a + 5] == ["```text", "清单正文", "```"]
+    z_c = _header_index(lines, "z-c")
+    assert lines[z_c] == "zzz | coffee-wechat | v1 | z-c | C | — | chars 70 | overall — | — | checklist — | high —"
+    assert lines[z_c + 1] == "text: —"
+    assert lines[z_c + 2] == "approval: approved | reviewer 林可 | 保留声明 | draft z-a"
+    a_b = _header_index(lines, "a-b")
+    assert lines[a_b + 1] == "```text"
+    assert lines[a_b + 2] == "场景正文"
+    assert "medium: tone | 语气 | 家人们" in text
+    bare = _header_index(lines, "bare-a")
+    assert lines[bare].startswith(
+        "bare | kidsnack-ecommerce | v1 | bare-a | A | 配料 | chars 12 | overall — | recommended | checklist — | high —"
+    )
+    assert lines[bare + 1] == "```text"
+    assert lines[bare + 2] == "配料表第一位是燕麦"
+    assert lines[bare + 3] == "```"
+    assert lines[bare + 4] == "approval: rejected | reviewer 周宁 | 语气太满 | draft bare-a"
+    assert text.count("approval:") == 3
+    assert "runs: 3" in text
+    assert "with_drafts: 3" in text
+    assert "without_drafts: 0" in text
+    assert "listed: 6" in text
+    assert "recommended: 3" in text
+    assert "not_recommended: 3" in text
+    assert "by_brief: coffee-wechat 3, sunscreen-xhs 2, kidsnack-ecommerce 1" in text
+    assert "by_channel: wechat 3, xiaohongshu 2, unknown 1" in text
+    assert "by_variant: A 3, B 2, C 1" in text
+    assert f"note: {OFFLINE_SCORE_NOTE}" in text
+
+    code = main(["show", "--out", str(out), "--json"])
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["kind"] == "stored_draft_text"
+    assert payload["n_listed"] == 6
+    assert payload["not_business_conversion"] is True
+    assert payload["note"] == OFFLINE_SCORE_NOTE
+    assert payload["skipped"] == ["nope"]
+    assert [row["text"] for row in payload["drafts"]] == [
+        "痛点第一行\n痛点第二行",
+        "清单正文",
+        None,
+        "场景正文",
+        "痛点正文",
+        "配料表第一位是燕麦",
+    ]
+    assert payload["drafts"][2]["dimensions"] is None
+    assert payload["drafts"][2]["findings"] == []
+    assert payload["drafts"][0]["dimensions"]["readability"] is None
+    assert payload["drafts"][0]["dimensions"]["compliance"] == 60
+    assert payload["drafts"][0]["findings"][1]["severity"] == "medium"
+    assert payload["drafts"][0]["approval_status"] == "approved"
+    assert payload["drafts"][0]["reviewer"] == "林可"
+    assert payload["drafts"][3]["approval_status"] == "pending"
+    assert payload["drafts"][3]["reviewer"] == "文件审阅"
+    assert payload["drafts"][5]["channel"] == "unknown"
+    assert payload["drafts"][5]["approval_status"] == "rejected"
+    assert payload["filters"]["draft"] is None
+
+    code = main(
+        [
+            "show",
+            "--draft",
+            "a-b",
+            "--variant",
+            "B",
+            "--channel",
+            "xhs",
+            "--brief",
+            "sunscreen-xhs",
+            "--out",
+            str(out),
+        ]
+    )
+    assert code == 0
+    filtered = capsys.readouterr().out
+    assert "场景正文" in filtered
+    assert "痛点第一行" not in filtered
+    assert "配料表第一位是燕麦" not in filtered
+    assert "zzz |" not in filtered
+    assert "bare |" not in filtered
+    assert "with_drafts: 3" in filtered
+    assert "listed: 1" in filtered
+    assert "recommended: 0" in filtered
+    assert "not_recommended: 1" in filtered
+    assert filtered.count("approval:") == 1
+
+    code = main(["show", "--draft", "a-b", "--variant", "A", "--out", str(out)])
+    assert code == 0
+    empty = capsys.readouterr().out
+    assert "没有文案" in empty
+    assert "```text" not in empty
+    assert "with_drafts: 3" in empty
+    assert "without_drafts: 0" in empty
+    assert "listed: 0" in empty
+    assert "by_brief: —" in empty
+
+    code = main(["show", "--channel", "unknown", "--out", str(out), "--json"])
+    assert code == 0
+    unknown = json.loads(capsys.readouterr().out)
+    assert [row["draft_id"] for row in unknown["drafts"]] == ["bare-a"]
+    assert unknown["drafts"][0]["text"] == "配料表第一位是燕麦"
+    assert unknown["n_with_drafts"] == 3
+    assert unknown["n_listed"] == 1
+
+
+def test_show_named_missing_run_exits_2(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    out = tmp_path / "out"
+    _write_draft_run(
+        out,
+        "sun",
+        "sunscreen-xhs",
+        "2024-01-01T00:00:00+00:00",
+        "xiaohongshu",
+        "小红书",
+        [{"id": "v1-a", "variant": "A", "angle": "痛点", "char_count": 10, "text": "还在"}],
+        "v1-a",
+        include_scores=False,
+        include_checklist=False,
+    )
+    code = main(["show", "missing-run", "--out", str(out)])
+    assert code == 2
+    assert "找不到运行" in capsys.readouterr().err
+
+    code = main(["show", "sun", "--version", "v9", "--out", str(out)])
+    assert code == 2
+    assert "版本索引里没有 v9" in capsys.readouterr().err
+
+    code = main(["show", "--version", "v1", "--out", str(out)])
+    assert code == 2
+    assert "--version 需要同时提供 run id" in capsys.readouterr().err
+
+    broken = out / "runs" / "broken"
+    broken.mkdir()
+    (broken / "manifest.json").write_text("{", encoding="utf-8")
+    (broken / "versions.json").write_text("{", encoding="utf-8")
+    code = main(["show", "broken", "--out", str(out)])
+    assert code == 2
+    assert "无法读取" in capsys.readouterr().err
+
+
+def test_show_selects_latest_version(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    out = tmp_path / "out"
+    run = out / "runs" / "sun"
+    for version, draft_id, overall, copy in (
+        ("v1", "old-a", 11, "旧版正文"),
+        ("v2", "new-a", 22, "新版第一行\n新版第二行"),
+    ):
+        directory = run / "versions" / version
+        directory.mkdir(parents=True)
+        _write_json(
+            directory / "drafts.json",
+            {"drafts": [{"id": draft_id, "variant": "A", "angle": version, "char_count": 3, "text": copy}]},
+        )
+        _write_json(
+            directory / "scores.json",
+            {
+                "drafts": [
+                    {
+                        "draft_id": draft_id,
+                        "variant": "A",
+                        "angle": version,
+                        "score": {
+                            "overall": overall,
+                            "dimensions": {
+                                "selling_point_accuracy": {"score": overall},
+                                "channel_fit": {"score": overall},
+                                "compliance": {"score": overall},
+                                "readability": {"score": overall},
+                            },
+                        },
+                    }
+                ]
+            },
+        )
+    _write_json(
+        run / "manifest.json",
+        {"run_id": "sun", "brief_id": "sunscreen-xhs", "channel": "xiaohongshu", "channel_label": "小红书"},
+    )
+    _write_json(
+        run / "versions.json",
+        {
+            "run_id": "sun",
+            "versions": [
+                {
+                    "version": "v1",
+                    "created_at": "2024-01-01T00:00:00+00:00",
+                    "best_draft_id": "old-a",
+                    "channel": "wechat",
+                    "channel_label": "微信公众号",
+                    "approval_status": "pending",
+                },
+                {
+                    "version": "v2",
+                    "created_at": "2024-02-01T00:00:00+00:00",
+                    "best_draft_id": "new-a",
+                    "channel": "xiaohongshu",
+                    "channel_label": "小红书",
+                    "approval_status": "approved",
+                    "approval_reviewer": "林可",
+                    "approval_comment": "用新版",
+                    "approved_draft_id": "new-a",
+                },
+            ],
+        },
+    )
+    _write_json(
+        run / "drafts.json",
+        {"drafts": [{"id": "root-only", "variant": "A", "angle": "根", "char_count": 1, "text": "根目录正文"}]},
+    )
+    quiet = out / "runs" / "quiet"
+    (quiet / "versions" / "v1").mkdir(parents=True)
+    _write_json(quiet / "manifest.json", {"run_id": "quiet", "brief_id": "coffee-wechat"})
+    _write_json(
+        quiet / "versions.json",
+        {
+            "run_id": "quiet",
+            "versions": [
+                {"version": "v1", "created_at": "2024-03-01T00:00:00+00:00", "best_draft_id": "q-a"}
+            ],
+        },
+    )
+
+    code = main(["show", "--out", str(out)])
+    assert code == 0
+    text = capsys.readouterr().out
+    assert "新版第一行" in text
+    assert "新版第二行" in text
+    assert "旧版正文" not in text
+    assert "根目录正文" not in text
+    assert "old-a" not in text
+    assert "root-only" not in text
+    assert "sun | sunscreen-xhs | v2 | new-a | A | v2 | chars 3 | overall 22 | recommended" in text
+    assert "dimensions: 卖点准确 22, 渠道适配 22, 合规 22, 可读性 22" in text
+    assert "approval: approved | reviewer 林可 | 用新版 | draft new-a" in text
+    assert "runs: 2" in text
+    assert "with_drafts: 1" in text
+    assert "without_drafts: 1" in text
+    assert "listed: 1" in text
+
+    code = main(["show", "sun", "--version", "v1", "--out", str(out), "--json"])
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["n"] == 1
+    assert payload["drafts"][0]["draft_id"] == "old-a"
+    assert payload["drafts"][0]["text"] == "旧版正文"
+    assert payload["drafts"][0]["version"] == "v1"
+    assert payload["drafts"][0]["overall"] == 11
+    assert payload["drafts"][0]["channel"] == "wechat"
+    assert payload["drafts"][0]["recommended"] is True
+    assert payload["drafts"][0]["approval_status"] == "pending"
+    assert "new-a" not in json.dumps(payload["drafts"], ensure_ascii=False)
+    assert "根目录正文" not in json.dumps(payload["drafts"], ensure_ascii=False)
+
+
+def test_show_mock_run_prints_stored_text_and_does_not_call_a_model(
+    briefs_dir: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("show must not call a model or rescore")
+
+    out = tmp_path / "out"
+    assert (
+        main(
+            [
+                "run",
+                str(briefs_dir / "sunscreen-xhs.yaml"),
+                "--mock",
+                "--run-id",
+                "demo-sunscreen",
+                "--out",
+                str(out),
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    root = out / "runs" / "demo-sunscreen" / "versions" / "v1"
+    stored = json.loads((root / "drafts.json").read_text(encoding="utf-8"))
+    scores = json.loads((root / "scores.json").read_text(encoding="utf-8"))
+    checklist = json.loads((root / "checklist.json").read_text(encoding="utf-8"))
+    history = json.loads((out / "runs" / "demo-sunscreen" / "versions.json").read_text(encoding="utf-8"))
+    record = history["versions"][0]
+    assert len(stored["drafts"]) == 3
+    before = _snapshot(out)
+    monkeypatch.setattr("mcw.cli.rescore_version", fail)
+    monkeypatch.setattr("mcw.store.score_text_card", fail)
+    monkeypatch.setattr("mcw.scoring.rubric.score_text", fail)
+    monkeypatch.setattr("mcw.risk.rules.run_rules", fail)
+    monkeypatch.setattr("mcw.textutil.char_count", fail)
+    monkeypatch.setattr("urllib.request.urlopen", fail)
+    code = main(["show", "--out", str(out)])
+    assert code == 0
+    assert _snapshot(out) == before
+    captured = capsys.readouterr()
+    text = captured.out
+    lines = text.splitlines()
+    assert captured.err == ""
+    assert "没有文案" not in text
+    assert OFFLINE_SCORE_NOTE in text
+    assert "listed: 3" in text
+    assert "recommended: 1" in text
+    assert "not_recommended: 2" in text
+    assert text.count("approval:") == 1
+    best_id = scores["best_draft_id"]
+    best_seen = False
+    score_by_id = {item["draft_id"]: item["score"] for item in scores["drafts"]}
+    findings_by_id = {item["draft_id"]: item["findings"] for item in checklist["items"]}
+    for draft in stored["drafts"]:
+        assert draft["text"] in text
+        header = next(
+            line
+            for line in lines
+            if line.startswith("demo-sunscreen") and f"| {draft['id']} |" in line
+        )
+        if draft["id"] == best_id:
+            assert "recommended" in header
+            best_seen = True
+        else:
+            assert "recommended" not in header
+        pos = lines.index(header)
+        dims = score_by_id[draft["id"]]["dimensions"]
+        expected_dims = "dimensions: " + ", ".join(
+            f"{label} {dims[key]['score']}" for key, label in DIMENSIONS
+        )
+        assert lines[pos + 1] == expected_dims
+        body = draft["text"].splitlines()
+        assert lines[pos + 2] == "```text"
+        assert lines[pos + 3 : pos + 3 + len(body)] == body
+        assert lines[pos + 3 + len(body)] == "```"
+    assert best_seen
+    assert f"approval: {record['approval_status']} | {record['comment']}" in text
+
+    code = main(["show", "--out", str(out), "--json"])
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["kind"] == "stored_draft_text"
+    assert payload["not_business_conversion"] is True
+    assert payload["note"] == OFFLINE_SCORE_NOTE
+    assert [row["draft_id"] for row in payload["drafts"]] == [item["id"] for item in stored["drafts"]]
+    assert [row["text"] for row in payload["drafts"]] == [item["text"] for item in stored["drafts"]]
+    assert [row["variant"] for row in payload["drafts"]] == [item["variant"] for item in stored["drafts"]]
+    assert [row["char_count"] for row in payload["drafts"]] == [item["char_count"] for item in stored["drafts"]]
+    assert [row["overall"] for row in payload["drafts"]] == [
+        score_by_id[item["id"]]["overall"] for item in stored["drafts"]
+    ]
+    for row in payload["drafts"]:
+        stored_dims = score_by_id[row["draft_id"]]["dimensions"]
+        assert row["dimensions"] == {key: stored_dims[key]["score"] for key, _label in DIMENSIONS}
+        assert row["findings"] == [
+            {
+                "rule_id": finding["rule_id"],
+                "severity": finding["severity"],
+                "message": finding["message"],
+                "evidence": finding["evidence"],
+                "suggestion": finding["suggestion"],
+            }
+            for finding in findings_by_id[row["draft_id"]]
+        ]
+        assert row["approval_status"] == record["approval_status"]
+        assert row["comment"] == record["comment"]
+    assert sum(1 for row in payload["drafts"] if row["recommended"]) == 1
+    assert next(row["draft_id"] for row in payload["drafts"] if row["recommended"]) == best_id
+    assert all(row["checklist_passed"] is True for row in payload["drafts"])
+    assert all(row["high_finding_count"] == 0 for row in payload["drafts"])
+
+
+def test_show_help(capsys: pytest.CaptureFixture[str]) -> None:
+    code = main(["show", "--help"])
+    assert code == 0
+    text = capsys.readouterr().out
+    assert "--out" in text
+    assert "--json" in text
+    assert "--version" in text
+    assert "--draft" in text
+    assert "--variant" in text
+    assert "--channel" in text
+    assert "--brief" in text
+
+    code = main(["--help"])
+    assert code == 0
+    assert "show" in capsys.readouterr().out
+
+
+def _header_index(lines: list[str], draft_id: str) -> int:
+    return next(index for index, line in enumerate(lines) if f"| {draft_id} |" in line)
+
+
 def _write_draft_run(
     out: Path,
     run_id: str,
@@ -2154,6 +2726,8 @@ def _write_draft_run(
     checklist_items: list | None = None,
     include_scores: bool = True,
     include_checklist: bool = True,
+    record_extra: dict | None = None,
+    approval: dict | None = None,
 ) -> None:
     run = out / "runs" / run_id
     version_dir = run / "versions" / "v1"
@@ -2172,6 +2746,8 @@ def _write_draft_run(
     if channel_label is not None:
         manifest["channel_label"] = channel_label
         record["channel_label"] = channel_label
+    if record_extra:
+        record.update(record_extra)
     _write_json(run / "manifest.json", manifest)
     _write_json(run / "versions.json", {"run_id": run_id, "versions": [record]})
     _write_json(version_dir / "drafts.json", {"drafts": drafts})
@@ -2179,3 +2755,5 @@ def _write_draft_run(
         _write_json(version_dir / "scores.json", {"best_draft_id": best_draft_id, "drafts": scores or []})
     if include_checklist:
         _write_json(version_dir / "checklist.json", {"items": checklist_items or []})
+    if approval is not None:
+        _write_json(version_dir / "approval.json", approval)

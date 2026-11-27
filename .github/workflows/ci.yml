@@ -37,9 +37,13 @@ jobs:
           python -m mcw list-findings --out .mcw --json > /tmp/mcw-list-findings.json
           python -m mcw list-drafts --out .mcw | tee /tmp/mcw-list-drafts.txt
           python -m mcw list-drafts --out .mcw --json > /tmp/mcw-list-drafts.json
+          python -m mcw show --out .mcw | tee /tmp/mcw-show.txt
+          python -m mcw show --out .mcw --json > /tmp/mcw-show.json
           python - <<'PY'
           import json
           from pathlib import Path
+
+          from mcw.scoring.rubric import OFFLINE_SCORE_NOTE
           root = Path(".mcw/runs/ci-sunscreen")
           drafts = json.loads((root / "drafts.json").read_text(encoding="utf-8"))
           checklist = json.loads((root / "checklist.json").read_text(encoding="utf-8"))
@@ -133,5 +137,29 @@ jobs:
           }
           for row in listed:
               assert row["overall"] == stored_overall[row["draft_id"]]
+          show_text = Path("/tmp/mcw-show.txt").read_text(encoding="utf-8")
+          assert OFFLINE_SCORE_NOTE in show_text
+          assert "离线内容分" in show_text
+          assert "转化率" in show_text
+          show_headers = [line for line in show_text.splitlines() if line.startswith("ci-sunscreen")]
+          assert show_headers
+          assert all("| v2 |" in line for line in show_headers)
+          for stored in stored_drafts["drafts"]:
+              assert stored["text"] in show_text
+          show_best = [line for line in show_headers if best_id in line]
+          assert show_best and "recommended" in show_best[0]
+          for stored in stored_drafts["drafts"]:
+              if stored["id"] != best_id:
+                  other = next(line for line in show_headers if stored["id"] in line)
+                  assert "recommended" not in other
+          show_payload = json.loads(Path("/tmp/mcw-show.json").read_text(encoding="utf-8"))
+          assert show_payload["not_business_conversion"] is True
+          assert "转化率" in show_payload["note"]
+          assert "离线内容分" in show_payload["note"]
+          shown = show_payload["drafts"]
+          assert show_payload["n_listed"] == len(shown) == 3
+          assert [row["version"] for row in shown] == ["v2", "v2", "v2"]
+          assert [row["text"] for row in shown] == [item["text"] for item in stored_drafts["drafts"]]
+          assert sum(1 for row in shown if row["recommended"]) == 1
           print("ci demo ok", len(drafts["drafts"]))
           PY

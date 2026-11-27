@@ -23,6 +23,7 @@ python3 -m mcw stats
 python3 -m mcw failures
 python3 -m mcw list-findings
 python3 -m mcw list-drafts
+python3 -m mcw show
 ```
 
 产物在 `.mcw/runs/demo-sunscreen/`。Mock 写出的小红书变体 A 是这样的：
@@ -97,6 +98,7 @@ flowchart LR
 | `mcw failures` | 列出未满分、被驳回，或推荐稿含高风险项的已保存运行 |
 | `mcw list-findings [run]` | 列出已保存清单里的发现，含全部草稿和全部严重级别 |
 | `mcw list-drafts [run]` | 列出已保存的全部文案变体、离线总分和清单状态，含未推荐稿 |
+| `mcw show [run]` | 打印已保存文案正文、离线维度分、清单发现和确认状态 |
 
 每个命令都可以加 `--json`。`--variants` 取 1 到 5。run id 只能是一段路径名。
 
@@ -111,6 +113,8 @@ flowchart LR
 `mcw list-findings` 清点已经写进 `checklist.json` 的发现。默认扫描每条运行的最新版本，选版规则和 `mcw list-runs` 相同（版本号最大；并列时保留更靠后的那条）。`mcw list-findings <run> [--version v1]` 只读一个版本。它会走过该版本里的每一份草稿，不限于 `best_draft_id`，也会列出每一种严重级别，不限于 high。`--rule`、`--severity`、`--draft`、`--brief` 都是精确匹配。`--channel` 接受规范渠道 id（`xiaohongshu`）、中文渠道名（`小红书`），或 `CHANNEL_ALIASES` 里的别名（例如 `xhs`）。旧索引没有渠道时是 `unknown`，只匹配 `unknown`。这些条件同时生效。没有命中时打印 `没有发现`，退出码仍是 0。加载到的清单里本来就没有发现时，也是这一行。无效运行目录记入 skipped，文本模式在 stderr 打印 `跳过无效运行目录`，命令仍退出 0。有发现和没有发现的运行数在过滤之前就算好；`listed`、`by_rule`、`by_severity` 只统计过滤后剩下的行。它先读 `manifest.json` 和 `versions.json`，再读该版本的 `checklist.json`。它不调用模型，不重算风险规则，也不写文件。这些行是已保存的清单发现，不是投放转化率。
 
 `mcw list-drafts` 清点选中版本里已经保存的每一份文案，包括没有被推荐的变体。默认扫描每条运行的最新版本，选版规则和 `mcw list-runs` 相同（版本号最大；并列时保留更靠后的那条）。`mcw list-drafts <run> [--version v1]` 只读一个版本。它先读 `manifest.json` 和 `versions.json`，再读该版本的 `drafts.json`，按文件顺序走过每一份草稿，不限于 `best_draft_id`。`scores.json` 和 `checklist.json` 能读到时，按草稿 id 拼上已保存的离线分和清单状态。分数或清单文件缺失、读不出来时，这一行仍然保留，对应字段留空。`drafts.json` 缺失或里面没有列表时，改用 `scores.json` 里的 `drafts`，再退到版本索引上的 `variant_scores`。不是对象的条目会跳过。`--draft`、`--variant`、`--brief` 都是精确匹配。`--channel` 接受规范渠道 id（`xiaohongshu`）、中文渠道名（`小红书`），或 `CHANNEL_ALIASES` 里的别名（例如 `xhs`）。旧索引没有渠道时是 `unknown`，只匹配 `unknown`。这些条件同时生效。没有命中时打印 `没有文案`，退出码仍是 0。加载到的版本里本来就没有文案时，也是这一行。无效运行目录记入 skipped，文本模式在 stderr 打印 `跳过无效运行目录`，命令仍退出 0。有文案和没有文案的运行数在过滤之前就算好；`listed`、推荐与否、`by_brief`、`by_channel`、`by_variant` 只统计过滤后剩下的行。它不调用模型，不重算量表，不重跑风险规则，也不写文件。行里的总分是已保存的离线内容分，不是投放转化率。
+
+`mcw show` 是这份目录的正文视图。它打印已经保存的文案、已经保存的维度分、已经保存的清单发现，以及已经保存的确认结果，不会重新计算。默认扫描每条运行的最新版本，选版规则和 `mcw list-runs` 相同（版本号最大；并列时保留更靠后的那条）。`mcw show <run> [--version v1]` 只读一个版本。它先读 `manifest.json` 和 `versions.json`，再读该版本的 `drafts.json`，按文件顺序走过每一份草稿，不限于 `best_draft_id`。`scores.json` 和 `checklist.json` 能读到时，按草稿 id 拼上已保存的离线分、维度分和清单发现。确认状态来自版本索引（`approval_status`，以及已经记下的审阅人、备注和草稿 id），索引缺了某一项、而 `approval.json` 又能读到时，用文件里的值补上。分数、清单或确认文件缺失、读不出来时，这一行仍然保留，对应字段留空。`drafts.json` 缺失或里面没有列表时，回退和 `mcw list-drafts` 相同：先用 `scores.json` 里的 `drafts`，再退到版本索引上的 `variant_scores`。这种回退通常没有正文，`text` 留空，不会编一句文案。`--draft`、`--variant`、`--brief` 都是精确匹配。`--channel` 接受规范渠道 id（`xiaohongshu`）、中文渠道名（`小红书`），或 `CHANNEL_ALIASES` 里的别名（例如 `xhs`）。旧索引没有渠道时是 `unknown`，只匹配 `unknown`。这些条件同时生效。没有命中时打印 `没有文案`，退出码仍是 0。加载到的版本里本来就没有文案时，也是这一行。无效运行目录记入 skipped，文本模式在 stderr 打印 `跳过无效运行目录`，命令仍退出 0。有文案和没有文案的运行数在过滤之前就算好；`listed`、推荐与否、`by_brief`、`by_channel`、`by_variant` 只统计过滤后剩下的行。它不调用模型，不重算量表，不重跑风险规则，也不写文件。总分和维度分都是已保存的离线内容分，不是投放转化率。
 
 ## 五则中文 Brief
 
@@ -159,6 +163,6 @@ python3 -m pip install -e ".[dev]"
 pytest -q
 ```
 
-GitHub Actions 在 Python 3.11 和 3.12 上跑 pytest，再跑一遍 `mcw run --mock`、`mcw score --fixtures`、`mcw list-versions`、`mcw compare`、`mcw list-briefs`、`mcw list-runs`、`mcw stats`、`mcw failures`、`mcw list-findings` 和 `mcw list-drafts`。贡献方式见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+GitHub Actions 在 Python 3.11 和 3.12 上跑 pytest，再跑一遍 `mcw run --mock`、`mcw score --fixtures`、`mcw list-versions`、`mcw compare`、`mcw list-briefs`、`mcw list-runs`、`mcw stats`、`mcw failures`、`mcw list-findings`、`mcw list-drafts` 和 `mcw show`。贡献方式见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 [MIT](LICENSE)

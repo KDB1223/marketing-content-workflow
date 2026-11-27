@@ -337,6 +337,78 @@ def inventory_drafts(
     }
 
 
+def show_drafts(
+    out: Path,
+    run_id: str | None = None,
+    version: str | None = None,
+    *,
+    draft: str | None = None,
+    variant: str | None = None,
+    channel: str | None = None,
+    brief: str | None = None,
+) -> dict[str, Any]:
+    """Read stored draft text for the selected versions.
+
+    Uses the same latest-version rule, filters, and draft fallback as
+    inventory_drafts. Reads manifest.json and versions.json first, then that
+    version's drafts.json. scores.json and checklist.json are joined by draft
+    id when they can be read. Approval is taken from the version index
+    (approval_status, and reviewer, comment, and draft id when those strings
+    are stored) and any missing field is filled from approval.json when that
+    file can be read. A missing or unreadable score, checklist, or approval
+    file keeps the row and leaves those fields empty. Text comes only from
+    drafts.json. The scores.json and index fallbacks keep the row and set text
+    to null. This does not call a model, recompute the rubric, re-run risk
+    rules, or write files. The numbers are stored offline content scores, not
+    conversion rates.
+    """
+    if version is not None and run_id is None:
+        raise MCWError("--version 需要同时提供 run id")
+    if run_id is not None:
+        selected = [_draft_source(out, run_id, version)]
+        skipped: list[str] = []
+    else:
+        inventory = list_saved_runs(out)
+        selected = [_draft_source_from_row(out, row) for row in inventory["runs"]]
+        skipped = list(inventory["skipped"])
+    loaded: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
+    for source in selected:
+        loaded.append((source, _stored_show_drafts(out, source)))
+    listed: list[dict[str, Any]] = []
+    for source, drafts in loaded:
+        if not _finding_source_matches(source, channel=channel, brief=brief):
+            continue
+        for row in drafts:
+            if _draft_row_matches(row, draft=draft, variant=variant):
+                listed.append(row)
+    n_with = sum(1 for _source, drafts in loaded if drafts)
+    n_recommended = sum(1 for row in listed if row["recommended"])
+    return {
+        "kind": "stored_draft_text",
+        "n": len(loaded),
+        "n_with_drafts": n_with,
+        "n_without_drafts": len(loaded) - n_with,
+        "n_listed": len(listed),
+        "n_recommended": n_recommended,
+        "n_not_recommended": len(listed) - n_recommended,
+        "by_brief": _ranked_named_counts([_bucket_name(row.get("brief_id")) for row in listed], "brief_id"),
+        "by_channel": _ranked_named_counts([_bucket_name(row.get("channel")) for row in listed], "channel"),
+        "by_variant": _ranked_named_counts([_bucket_name(row.get("variant")) for row in listed], "variant"),
+        "filters": {
+            "run": run_id,
+            "version": version,
+            "draft": draft,
+            "variant": variant,
+            "channel": channel,
+            "brief": brief,
+        },
+        "skipped": skipped,
+        "drafts": listed,
+        "note": OFFLINE_SCORE_NOTE,
+        "not_business_conversion": True,
+    }
+
+
 def _finding_source_from_row(row: dict[str, Any]) -> dict[str, str]:
     return {
         "run_id": str(row["run_id"]),
@@ -620,6 +692,137 @@ def _draft_row_matches(row: dict[str, Any], *, draft: str | None, variant: str |
     if variant is not None and row.get("variant") != variant:
         return False
     return True
+
+
+def _stored_show_drafts(out: Path, source: dict[str, Any]) -> list[dict[str, Any]]:
+    directory = version_dir(out, source["run_id"], source["version"])
+    drafts_doc = _read_optional_json(directory / "drafts.json")
+    scores_doc = _read_optional_json(directory / "scores.json")
+    checklist_doc = _read_optional_json(directory / "checklist.json")
+    entries, origin = _draft_entries(drafts_doc, scores_doc, source)
+    scores_index = _index_score_entries(scores_doc)
+    checklist_index = _index_checklist_entries(checklist_doc)
+    approval = _stored_approval(out, source)
+    rows: list[dict[str, Any]] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        row = _draft_row(source, entry, origin, scores_index, checklist_index)
+        draft_id = row["draft_id"]
+        row["text"] = _stored_draft_text(entry, origin)
+        row["dimensions"] = _joined_dimensions(entry, origin, scores_index, draft_id)
+        checklist_item = checklist_index.get(draft_id) if isinstance(draft_id, str) else None
+        row["findings"] = _stored_draft_findings(source, draft_id, checklist_item)
+        row.update(approval)
+        rows.append(row)
+    return rows
+
+
+def _stored_draft_text(entry: dict[str, Any], origin: str) -> str | None:
+    if origin != "drafts":
+        return None
+    return _finding_text(entry.get("text"))
+
+
+def _joined_dimensions(
+    entry: dict[str, Any],
+    origin: str,
+    scores_index: dict[str, dict[str, Any]],
+    draft_id: str | None,
+) -> dict[str, int | float | None] | None:
+    if origin == "scores":
+        score_entry: dict[str, Any] | None = entry
+    elif isinstance(draft_id, str):
+        score_entry = scores_index.get(draft_id)
+    else:
+        score_entry = None
+    if not isinstance(score_entry, dict):
+        return None
+    score = score_entry.get("score")
+    if not isinstance(score, dict):
+        return None
+    raw = _score_dimensions(score)
+    if raw is None:
+        return None
+    return {key: _stored_number(raw.get(key)) for key, _label in DIMENSIONS}
+
+
+def _stored_draft_findings(
+    source: dict[str, Any],
+    draft_id: object,
+    checklist_item: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    if not isinstance(checklist_item, dict):
+        return []
+    findings = checklist_item.get("findings")
+    if not isinstance(findings, list):
+        return []
+    identity = {
+        "run_id": str(source["run_id"]),
+        "brief_id": str(source["brief_id"]),
+        "version": str(source["version"]),
+        "channel": str(source["channel"]),
+        "channel_label": str(source["channel_label"]),
+    }
+    rows: list[dict[str, Any]] = []
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        stored = _finding_row(identity, draft_id, finding)
+        rows.append(
+            {
+                "rule_id": stored["rule_id"],
+                "severity": stored["severity"],
+                "message": stored["message"],
+                "evidence": stored["evidence"],
+                "suggestion": stored["suggestion"],
+            }
+        )
+    return rows
+
+
+def _stored_approval(out: Path, source: dict[str, Any]) -> dict[str, Any]:
+    """Approval strings from the version index, then approval.json.
+
+    Index fields win when they are strings, including an empty string.
+    approval_reviewer, approval_comment, and approved_draft_id are preferred
+    over the version's reviewer and comment. A missing or unreadable
+    approval.json leaves the remaining fields null.
+    """
+    history = load_history(out, str(source["run_id"]))
+    record = _record_for_version(history.get("versions"), str(source["version"]))
+    if not isinstance(record, dict):
+        record = {}
+    file_approval = _read_optional_json(
+        version_dir(out, str(source["run_id"]), str(source["version"])) / "approval.json"
+    )
+    if not isinstance(file_approval, dict):
+        file_approval = {}
+    return {
+        "approval_status": _coalesce_text(record.get("approval_status"), file_approval.get("status")),
+        "reviewer": _coalesce_text(
+            record.get("approval_reviewer"),
+            record.get("reviewer"),
+            file_approval.get("reviewer"),
+        ),
+        "comment": _coalesce_text(
+            record.get("approval_comment"),
+            record.get("comment"),
+            file_approval.get("comment"),
+        ),
+        "approved_draft_id": _coalesce_text(
+            record.get("approved_draft_id"),
+            record.get("draft_id"),
+            file_approval.get("draft_id"),
+        ),
+    }
+
+
+def _coalesce_text(*values: object) -> str | None:
+    for value in values:
+        if isinstance(value, str):
+            return value
+    return None
 
 
 def _stored_number(value: object) -> int | float | None:
